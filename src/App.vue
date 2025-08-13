@@ -12,7 +12,7 @@
 import { useEventListener } from '@vueuse/core'
 import BlockUI from 'primevue/blockui'
 import ProgressSpinner from 'primevue/progressspinner'
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
 
 import GlobalDialog from '@/components/dialog/GlobalDialog.vue'
 import config from '@/config'
@@ -38,6 +38,12 @@ const showContextMenu = (event: MouseEvent) => {
       return
   }
 }
+
+watch(isLoading, (newValue) => {
+  if (!newValue) {
+    window.parent.postMessage('iframeReady', '*')
+  }
+})
 
 onMounted(() => {
   // @ts-expect-error fixme ts strict error
