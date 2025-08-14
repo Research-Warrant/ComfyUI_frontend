@@ -20,6 +20,11 @@ import App from './App.vue'
 import './assets/css/style.css'
 import { i18n } from './i18n'
 
+// Override console methods in production
+if (!import.meta.env.DEV) {
+  void import('./utils/console-override')
+}
+
 const ComfyUIPreset = definePreset(Aura, {
   semantic: {
     // @ts-expect-error fixme ts strict error
