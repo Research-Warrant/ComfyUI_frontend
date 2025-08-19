@@ -107,6 +107,9 @@
   "Comfy_ContactSupport": {
     "label": "Связаться с поддержкой"
   },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "Показать выбор модели (Dev)"
+  },
   "Comfy_DuplicateWorkflow": {
     "label": "Дублировать текущий рабочий процесс"
   },
@@ -130,6 +133,9 @@
   },
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "Группировать выбранные ноды"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "Распаковать выбранный подграф"
   },
   "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
     "label": "Преобразовать выбранные ноды в групповую ноду"
@@ -182,6 +188,9 @@
   "Comfy_OpenClipspace": {
     "label": "Клипспейс"
   },
+  "Comfy_OpenManagerDialog": {
+    "label": "Менеджер"
+  },
   "Comfy_OpenWorkflow": {
     "label": "Открыть рабочий процесс"
   },
@@ -208,6 +217,12 @@
   },
   "Comfy_ShowSettingsDialog": {
     "label": "Показать диалог настроек"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "Производительность холста"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "Центр поддержки"
   },
   "Comfy_ToggleTheme": {
     "label": "Переключить тему (Тёмная/Светлая)"

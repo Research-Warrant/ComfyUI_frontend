@@ -107,6 +107,9 @@
   "Comfy_ContactSupport": {
     "label": "Contact Support"
   },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "Show Model Selector (Dev)"
+  },
   "Comfy_DuplicateWorkflow": {
     "label": "Duplicate Current Workflow"
   },
@@ -125,14 +128,14 @@
   "Comfy_Graph_ExitSubgraph": {
     "label": "Exit Subgraph"
   },
-  "Comfy_Graph_UnpackSubgraph": {
-    "label": "Unpack the selected Subgraph"
-  },
   "Comfy_Graph_FitGroupToContents": {
     "label": "Fit Group To Contents"
   },
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "Group Selected Nodes"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "Unpack the selected Subgraph"
   },
   "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
     "label": "Convert selected nodes to group node"
@@ -185,6 +188,9 @@
   "Comfy_OpenClipspace": {
     "label": "Clipspace"
   },
+  "Comfy_OpenManagerDialog": {
+    "label": "Manager"
+  },
   "Comfy_OpenWorkflow": {
     "label": "Open Workflow"
   },
@@ -211,6 +217,12 @@
   },
   "Comfy_ShowSettingsDialog": {
     "label": "Show Settings Dialog"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "Canvas Performance"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "Help Center"
   },
   "Comfy_ToggleTheme": {
     "label": "Toggle Theme (Dark/Light)"

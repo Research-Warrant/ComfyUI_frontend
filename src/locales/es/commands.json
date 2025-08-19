@@ -107,6 +107,9 @@
   "Comfy_ContactSupport": {
     "label": "Contactar soporte"
   },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "Mostrar selector de modelo (Dev)"
+  },
   "Comfy_DuplicateWorkflow": {
     "label": "Duplicar flujo de trabajo actual"
   },
@@ -130,6 +133,9 @@
   },
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "Agrupar nodos seleccionados"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "Desempaquetar el subgrafo seleccionado"
   },
   "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
     "label": "Convertir nodos seleccionados en nodo de grupo"
@@ -182,6 +188,9 @@
   "Comfy_OpenClipspace": {
     "label": "Abrir espacio de clips"
   },
+  "Comfy_OpenManagerDialog": {
+    "label": "Administrador"
+  },
   "Comfy_OpenWorkflow": {
     "label": "Abrir Flujo de Trabajo"
   },
@@ -208,6 +217,12 @@
   },
   "Comfy_ShowSettingsDialog": {
     "label": "Mostrar Diálogo de Configuraciones"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "Rendimiento del lienzo"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "Centro de ayuda"
   },
   "Comfy_ToggleTheme": {
     "label": "Cambiar Tema (Oscuro/Claro)"

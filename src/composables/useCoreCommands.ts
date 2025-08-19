@@ -1,5 +1,6 @@
 import { useFirebaseAuthActions } from '@/composables/auth/useFirebaseAuthActions'
 import { useSelectedLiteGraphItems } from '@/composables/canvas/useSelectedLiteGraphItems'
+import { useModelSelectorDialog } from '@/composables/useModelSelectorDialog'
 import {
   DEFAULT_DARK_COLOR_PALETTE,
   DEFAULT_LIGHT_COLOR_PALETTE
@@ -9,7 +10,8 @@ import {
   LGraphEventMode,
   LGraphGroup,
   LGraphNode,
-  LiteGraph
+  LiteGraph,
+  SubgraphNode
 } from '@/lib/litegraph/src/litegraph'
 import { Point } from '@/lib/litegraph/src/litegraph'
 import { api } from '@/scripts/api'
@@ -21,6 +23,7 @@ import { useWorkflowService } from '@/services/workflowService'
 import type { ComfyCommand } from '@/stores/commandStore'
 import { useExecutionStore } from '@/stores/executionStore'
 import { useCanvasStore, useTitleEditorStore } from '@/stores/graphStore'
+import { useHelpCenterStore } from '@/stores/helpCenterStore'
 import { useNodeOutputStore } from '@/stores/imagePreviewStore'
 import { useQueueSettingsStore, useQueueStore } from '@/stores/queueStore'
 import { useSettingStore } from '@/stores/settingStore'
@@ -278,6 +281,7 @@ export function useCoreCommands(): ComfyCommand[] {
       id: 'Comfy.Canvas.FitView',
       icon: 'pi pi-expand',
       label: 'Fit view to selected nodes',
+      menubarLabel: 'Zoom to fit',
       category: 'view-controls' as const,
       function: () => {
         if (app.canvas.empty) {
@@ -303,6 +307,7 @@ export function useCoreCommands(): ComfyCommand[] {
       id: 'Comfy.Canvas.ToggleLinkVisibility',
       icon: 'pi pi-eye',
       label: 'Canvas Toggle Link Visibility',
+      menubarLabel: 'Node Links',
       versionAdded: '1.3.6',
 
       function: (() => {
@@ -324,12 +329,15 @@ export function useCoreCommands(): ComfyCommand[] {
             )
           }
         }
-      })()
+      })(),
+      active: () =>
+        useSettingStore().get('Comfy.LinkRenderMode') !== LiteGraph.HIDDEN_LINK
     },
     {
       id: 'Comfy.Canvas.ToggleMinimap',
       icon: 'pi pi-map',
       label: 'Canvas Toggle Minimap',
+      menubarLabel: 'Minimap',
       versionAdded: '1.24.1',
       function: async () => {
         const settingStore = useSettingStore()
@@ -337,7 +345,8 @@ export function useCoreCommands(): ComfyCommand[] {
           'Comfy.Minimap.Visible',
           !settingStore.get('Comfy.Minimap.Visible')
         )
-      }
+      },
+      active: () => useSettingStore().get('Comfy.Minimap.Visible')
     },
     {
       id: 'Comfy.QueuePrompt',
@@ -541,21 +550,25 @@ export function useCoreCommands(): ComfyCommand[] {
       id: 'Workspace.ToggleBottomPanel',
       icon: 'pi pi-list',
       label: 'Toggle Bottom Panel',
+      menubarLabel: 'Bottom Panel',
       versionAdded: '1.3.22',
       category: 'view-controls' as const,
       function: () => {
         bottomPanelStore.toggleBottomPanel()
-      }
+      },
+      active: () => bottomPanelStore.bottomPanelVisible
     },
     {
       id: 'Workspace.ToggleFocusMode',
       icon: 'pi pi-eye',
       label: 'Toggle Focus Mode',
+      menubarLabel: 'Focus Mode',
       versionAdded: '1.3.27',
       category: 'view-controls' as const,
       function: () => {
         useWorkspaceStore().toggleFocusMode()
-      }
+      },
+      active: () => useWorkspaceStore().focusMode
     },
     {
       id: 'Comfy.Graph.FitGroupToContents',
@@ -796,6 +809,7 @@ export function useCoreCommands(): ComfyCommand[] {
         }
         const { node } = res
         canvas.select(node)
+        canvasStore.updateSelectedItems()
       }
     },
     {
@@ -810,9 +824,38 @@ export function useCoreCommands(): ComfyCommand[] {
         if (!graph) throw new TypeError('Canvas has no graph or subgraph set.')
 
         const subgraphNode = app.canvas.selectedItems.values().next().value
+        if (!(subgraphNode instanceof SubgraphNode)) return
         useNodeOutputStore().revokeSubgraphPreviews(subgraphNode)
         graph.unpackSubgraph(subgraphNode)
       }
+    },
+    {
+      id: 'Comfy.OpenManagerDialog',
+      icon: 'mdi mdi-puzzle-outline',
+      label: 'Manager',
+      function: () => {
+        dialogService.showManagerDialog()
+      }
+    },
+    {
+      id: 'Comfy.ToggleHelpCenter',
+      icon: 'pi pi-question-circle',
+      label: 'Help Center',
+      function: () => {
+        useHelpCenterStore().toggle()
+      },
+      active: () => useHelpCenterStore().isVisible
+    },
+    {
+      id: 'Comfy.ToggleCanvasInfo',
+      icon: 'pi pi-info-circle',
+      label: 'Canvas Performance',
+      function: async () => {
+        const settingStore = useSettingStore()
+        const currentValue = settingStore.get('Comfy.Graph.CanvasInfo')
+        await settingStore.set('Comfy.Graph.CanvasInfo', !currentValue)
+      },
+      active: () => useSettingStore().get('Comfy.Graph.CanvasInfo')
     },
     {
       id: 'Workspace.ToggleBottomPanel.Shortcuts',
@@ -837,6 +880,17 @@ export function useCoreCommands(): ComfyCommand[] {
         canvas.setGraph(
           navigationStore.navigationStack.at(-2) ?? canvas.graph.rootGraph
         )
+      }
+    },
+    {
+      id: 'Comfy.Dev.ShowModelSelector',
+      icon: 'pi pi-box',
+      label: 'Show Model Selector (Dev)',
+      versionAdded: '1.26.2',
+      category: 'view-controls' as const,
+      function: () => {
+        const modelSelectorDialog = useModelSelectorDialog()
+        modelSelectorDialog.show()
       }
     }
   ]

@@ -107,6 +107,9 @@
   "Comfy_ContactSupport": {
     "label": "الاتصال بالدعم"
   },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "إظهار منتقي النماذج (للمطورين)"
+  },
   "Comfy_DuplicateWorkflow": {
     "label": "تكرار سير العمل الحالي"
   },
@@ -130,6 +133,9 @@
   },
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "تجميع العقد المحددة"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "فك التفرع الفرعي المحدد"
   },
   "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
     "label": "تحويل العقد المحددة إلى عقدة مجموعة"
@@ -182,6 +188,9 @@
   "Comfy_OpenClipspace": {
     "label": "Clipspace"
   },
+  "Comfy_OpenManagerDialog": {
+    "label": "مدير"
+  },
   "Comfy_OpenWorkflow": {
     "label": "فتح سير عمل"
   },
@@ -208,6 +217,12 @@
   },
   "Comfy_ShowSettingsDialog": {
     "label": "عرض نافذة الإعدادات"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "أداء اللوحة"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "مركز المساعدة"
   },
   "Comfy_ToggleTheme": {
     "label": "تبديل النمط (فاتح/داكن)"

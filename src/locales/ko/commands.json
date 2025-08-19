@@ -107,6 +107,9 @@
   "Comfy_ContactSupport": {
     "label": "지원팀에 문의하기"
   },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "모델 선택기 표시 (개발자용)"
+  },
   "Comfy_DuplicateWorkflow": {
     "label": "현재 워크플로 복제"
   },
@@ -130,6 +133,9 @@
   },
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "선택한 노드 그룹화"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "선택한 서브그래프 풀기"
   },
   "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
     "label": "선택한 노드를 그룹 노드로 변환"
@@ -182,6 +188,9 @@
   "Comfy_OpenClipspace": {
     "label": "클립스페이스"
   },
+  "Comfy_OpenManagerDialog": {
+    "label": "매니저"
+  },
   "Comfy_OpenWorkflow": {
     "label": "워크플로 열기"
   },
@@ -208,6 +217,12 @@
   },
   "Comfy_ShowSettingsDialog": {
     "label": "설정 대화상자 보기"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "캔버스 성능"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "도움말 센터"
   },
   "Comfy_ToggleTheme": {
     "label": "밝기 테마 전환 (어두운/밝은)"

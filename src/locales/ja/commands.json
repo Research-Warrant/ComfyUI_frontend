@@ -107,6 +107,9 @@
   "Comfy_ContactSupport": {
     "label": "サポートに連絡"
   },
+  "Comfy_Dev_ShowModelSelector": {
+    "label": "モデルセレクターを表示（開発用）"
+  },
   "Comfy_DuplicateWorkflow": {
     "label": "現在のワークフローを複製"
   },
@@ -130,6 +133,9 @@
   },
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "選択したノードをグループ化"
+  },
+  "Comfy_Graph_UnpackSubgraph": {
+    "label": "選択したサブグラフを展開"
   },
   "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
     "label": "選択したノードをグループノードに変換"
@@ -182,6 +188,9 @@
   "Comfy_OpenClipspace": {
     "label": "クリップスペース"
   },
+  "Comfy_OpenManagerDialog": {
+    "label": "マネージャー"
+  },
   "Comfy_OpenWorkflow": {
     "label": "ワークフローを開く"
   },
@@ -208,6 +217,12 @@
   },
   "Comfy_ShowSettingsDialog": {
     "label": "設定ダイアログを表示"
+  },
+  "Comfy_ToggleCanvasInfo": {
+    "label": "キャンバスパフォーマンス"
+  },
+  "Comfy_ToggleHelpCenter": {
+    "label": "ヘルプセンター"
   },
   "Comfy_ToggleTheme": {
     "label": "テーマの切り替え（ダーク/ライト）"
