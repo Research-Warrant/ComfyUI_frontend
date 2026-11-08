@@ -1,73 +1,77 @@
 <template>
-  <div class="flex flex-col h-full">
-    <Tabs
-      :key="$i18n.locale"
-      v-model:value="bottomPanelStore.activeBottomPanelTabId"
-    >
-      <TabList pt:tab-list="border-none">
-        <div class="w-full flex justify-between">
-          <div class="tabs-container">
-            <Tab
-              v-for="tab in bottomPanelStore.bottomPanelTabs"
-              :key="tab.id"
-              :value="tab.id"
-              class="p-3 border-none"
-            >
-              <span class="font-bold">
-                {{ getTabDisplayTitle(tab) }}
-              </span>
-            </Tab>
-          </div>
-          <div class="flex items-center gap-2">
-            <Button
-              v-if="isShortcutsTabActive"
-              :label="$t('shortcuts.manageShortcuts')"
-              icon="pi pi-cog"
-              severity="secondary"
-              size="small"
-              text
-              @click="openKeybindingSettings"
-            />
-            <Button
-              class="justify-self-end"
-              icon="pi pi-times"
-              severity="secondary"
-              size="small"
-              text
-              @click="closeBottomPanel"
-            />
-          </div>
+  <Tabs v-model="bottomPanelStore.activeBottomPanelTabId" class="h-full gap-0">
+    <TabsList variant="panel" class="w-full shrink-0">
+      <div class="flex w-full justify-between">
+        <div class="tabs-container">
+          <TabsTrigger
+            v-for="tab in bottomPanelStore.bottomPanelTabs"
+            :key="tab.id"
+            :value="tab.id"
+            variant="panel"
+            :class="
+              cn(
+                bottomPanelStore.bottomPanelTabs.length === 1 &&
+                  'pointer-events-none data-[state=active]:bg-transparent data-[state=active]:text-muted-foreground'
+              )
+            "
+          >
+            <span class="font-normal">
+              {{ getTabDisplayTitle(tab) }}
+            </span>
+          </TabsTrigger>
         </div>
-      </TabList>
-    </Tabs>
-    <!-- h-0 to force the div to flex-grow -->
-    <div class="flex-grow h-0">
-      <ExtensionSlot
-        v-if="
-          bottomPanelStore.bottomPanelVisible &&
-          bottomPanelStore.activeBottomPanelTab
-        "
-        :extension="bottomPanelStore.activeBottomPanelTab"
-      />
-    </div>
-  </div>
+        <div class="flex items-center gap-2">
+          <Button
+            v-if="isShortcutsTabActive"
+            variant="muted-textonly"
+            size="sm"
+            @click="openKeybindingSettings"
+          >
+            <i class="icon-[lucide--settings]" />
+            {{ $t('shortcuts.manageShortcuts') }}
+          </Button>
+          <Button
+            class="justify-self-end"
+            variant="muted-textonly"
+            size="sm"
+            :aria-label="t('g.close')"
+            @click="closeBottomPanel"
+          >
+            <i class="icon-[lucide--x]" />
+          </Button>
+        </div>
+      </div>
+    </TabsList>
+    <template v-if="bottomPanelStore.bottomPanelVisible">
+      <TabsContent
+        v-for="tab in bottomPanelStore.bottomPanelTabs"
+        :key="tab.id"
+        :value="tab.id"
+        class="h-0 grow"
+      >
+        <ExtensionSlot :extension="tab" />
+      </TabsContent>
+    </template>
+  </Tabs>
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import Tab from 'primevue/tab'
-import TabList from 'primevue/tablist'
-import Tabs from 'primevue/tabs'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 import ExtensionSlot from '@/components/common/ExtensionSlot.vue'
-import { useDialogService } from '@/services/dialogService'
+import Button from '@comfyorg/design-system/button/Button'
+import Tabs from '@comfyorg/design-system/tabs/Tabs'
+import TabsContent from '@comfyorg/design-system/tabs/TabsContent'
+import TabsList from '@comfyorg/design-system/tabs/TabsList'
+import TabsTrigger from '@comfyorg/design-system/tabs/TabsTrigger'
+import { useSettingsDialog } from '@/platform/settings/composables/useSettingsDialog'
 import { useBottomPanelStore } from '@/stores/workspace/bottomPanelStore'
 import type { BottomPanelExtension } from '@/types/extensionTypes'
+import { cn } from '@comfyorg/tailwind-utils'
 
 const bottomPanelStore = useBottomPanelStore()
-const dialogService = useDialogService()
+const settingsDialog = useSettingsDialog()
 const { t } = useI18n()
 
 const isShortcutsTabActive = computed(() => {
@@ -88,7 +92,7 @@ const getTabDisplayTitle = (tab: BottomPanelExtension): string => {
 }
 
 const openKeybindingSettings = async () => {
-  dialogService.showSettingsDialog('keybinding')
+  settingsDialog.show('keybinding')
 }
 
 const closeBottomPanel = () => {

@@ -1,7 +1,12 @@
-import type { ComfyNodeDefImpl } from '@/stores/nodeDefStore'
+import type { ComfyNodeDefImpl } from '@/core/graph/nodeDef/ComfyNodeDefImpl'
+import type {
+  RenderedTreeExplorerNode,
+  TreeNode
+} from '@/types/treeExplorerTypes'
 
 export type GroupingStrategyId = 'category' | 'module' | 'source'
 export type SortingStrategyId = 'original' | 'alphabetical'
+export type TabId = 'essentials' | 'all' | 'blueprints'
 
 /**
  * Strategy for grouping nodes into tree structure
@@ -41,4 +46,32 @@ export interface NodeSortStrategy {
 export interface NodeOrganizationOptions {
   groupBy?: string
   sortBy?: string
+}
+
+export type NodeCategoryId =
+  | 'blueprints'
+  | 'comfyNodes'
+  | 'extensions'
+  | 'partnerNodes'
+
+export const NODE_CATEGORY_LABELS: Record<NodeCategoryId, string> = {
+  blueprints: 'sideToolbar.nodeLibraryTab.sections.subgraphBlueprints',
+  comfyNodes: 'sideToolbar.nodeLibraryTab.sections.comfyNodes',
+  extensions: 'sideToolbar.nodeLibraryTab.sections.extensions',
+  partnerNodes: 'sideToolbar.nodeLibraryTab.sections.partnerNodes'
+}
+
+export interface NodeLibrarySection<T = unknown> {
+  category?: NodeCategoryId
+  title?: string
+  root: RenderedTreeExplorerNode<T>
+}
+
+export interface NodeSection {
+  /** Tree of nodes in this section */
+  tree: TreeNode<ComfyNodeDefImpl>
+  /** Filter category identifier */
+  category?: NodeCategoryId
+  /** Section title (i18n key) for tabs that don't use category-based labels */
+  title?: string
 }

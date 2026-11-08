@@ -1,32 +1,13 @@
-import { Form } from '@primevue/forms'
-import { mount } from '@vue/test-utils'
-import { createPinia } from 'pinia'
-import Button from 'primevue/button'
-import PrimeVue from 'primevue/config'
-import InputText from 'primevue/inputtext'
-import Message from 'primevue/message'
+import userEvent from '@testing-library/user-event'
+import { render, screen } from '@testing-library/vue'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createApp } from 'vue'
 import { createI18n } from 'vue-i18n'
 
-import { COMFY_PLATFORM_BASE_URL } from '@/config/comfyApi'
+import { getComfyPlatformBaseUrl } from '@/config/comfyApi'
+import { useAuthStore } from '@/stores/authStore'
 
 import ApiKeyForm from './ApiKeyForm.vue'
-
-const mockStoreApiKey = vi.fn()
-const mockLoading = vi.fn(() => false)
-
-vi.mock('@/stores/firebaseAuthStore', () => ({
-  useFirebaseAuthStore: vi.fn(() => ({
-    loading: mockLoading()
-  }))
-}))
-
-vi.mock('@/stores/apiKeyAuthStore', () => ({
-  useApiKeyAuthStore: vi.fn(() => ({
-    storeApiKey: mockStoreApiKey
-  }))
-}))
+vi.mock(import('firebase/auth'))
 
 const i18n = createI18n({
   legacy: false,
@@ -56,62 +37,59 @@ const i18n = createI18n({
 
 describe('ApiKeyForm', () => {
   beforeEach(() => {
-    const app = createApp({})
-    app.use(PrimeVue)
-    vi.clearAllMocks()
-    mockStoreApiKey.mockReset()
-    mockLoading.mockReset()
+    useAuthStore().loading = false
   })
 
-  const mountComponent = (props: any = {}) => {
-    return mount(ApiKeyForm, {
-      global: {
-        plugins: [PrimeVue, createPinia(), i18n],
-        components: { Button, Form, InputText, Message }
-      },
+  function renderComponent(props: Record<string, unknown> = {}) {
+    const user = userEvent.setup()
+    const result = render(ApiKeyForm, {
+      global: { plugins: [i18n] },
       props
     })
+    return { ...result, user }
   }
 
   it('renders correctly with all required elements', () => {
-    const wrapper = mountComponent()
+    renderComponent()
 
-    expect(wrapper.find('h1').text()).toBe('API Key')
-    expect(wrapper.find('label').text()).toBe('API Key')
-    expect(wrapper.findComponent(InputText).exists()).toBe(true)
-    expect(wrapper.findComponent(Button).exists()).toBe(true)
+    expect(screen.getByRole('heading', { name: 'API Key' })).toBeInTheDocument()
+    expect(screen.getByLabelText('API Key')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 
   it('emits back event when back button is clicked', async () => {
-    const wrapper = mountComponent()
+    const onBack = vi.fn()
+    const { user } = renderComponent({ onBack })
 
-    await wrapper.findComponent(Button).trigger('click')
-    expect(wrapper.emitted('back')).toBeTruthy()
+    await user.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(onBack).toHaveBeenCalled()
   })
 
-  it('shows loading state when submitting', async () => {
-    mockLoading.mockReturnValue(true)
-    const wrapper = mountComponent()
-    const input = wrapper.findComponent(InputText)
+  it('shows loading state when submitting', () => {
+    useAuthStore().loading = true
+    const { container } = renderComponent()
 
-    await input.setValue(
-      'comfyui-123456789012345678901234567890123456789012345678901234567890123456789012'
-    )
-    await wrapper.find('form').trigger('submit')
-
-    const submitButton = wrapper
-      .findAllComponents(Button)
-      .find((btn) => btn.text() === 'Save')
-    expect(submitButton?.props('loading')).toBe(true)
+    // oxlint-disable-next-line testing-library/no-container, testing-library/no-node-access
+    const submitButton = container.querySelector('button[type="submit"]')
+    expect(submitButton).toBeDisabled()
   })
 
   it('displays help text and links correctly', () => {
-    const wrapper = mountComponent()
+    renderComponent()
 
-    const helpText = wrapper.find('small')
-    expect(helpText.text()).toContain('Need an API key?')
-    expect(helpText.find('a').attributes('href')).toBe(
-      `${COMFY_PLATFORM_BASE_URL}/login`
+    expect(
+      screen.getByText('Need an API key?', { exact: false })
+    ).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Get one here' })).toHaveAttribute(
+      'href',
+      `${getComfyPlatformBaseUrl()}/login`
+    )
+    expect(
+      screen.getByRole('link', { name: 'About non-whitelisted sites' })
+    ).toHaveAttribute(
+      'href',
+      'https://docs.comfy.org/tutorials/partner-nodes/overview#log-in-with-comfyui-account-api-key-on-non-whitelisted-websites'
     )
   })
 })

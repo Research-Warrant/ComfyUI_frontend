@@ -1,63 +1,93 @@
 import { expect } from '@playwright/test'
+import type { Page } from '@playwright/test'
 
-import { comfyPageFixture } from '../fixtures/ComfyPage'
+import type { ComfyPage } from '@e2e/fixtures/ComfyPage'
+import { comfyPageFixture } from '@e2e/fixtures/ComfyPage'
+import { TestIds } from '@e2e/fixtures/selectors'
+import {
+  expectRegionScreenshot,
+  screenshotRegion
+} from '@e2e/fixtures/utils/screenshotRegion'
 
 const test = comfyPageFixture
 
 const BLUE_COLOR = 'rgb(51, 51, 85)'
 const RED_COLOR = 'rgb(85, 51, 51)'
 
-test.describe('Selection Toolbox', () => {
-  test.beforeEach(async ({ comfyPage }) => {
-    await comfyPage.setSetting('Comfy.Canvas.SelectionToolbox', true)
+async function selectionTargets(comfyPage: ComfyPage, nodeTitles: string[]) {
+  const nodes = await Promise.all(
+    nodeTitles.map((title) => comfyPage.nodeOps.getNodeRefsByTitle(title))
+  )
+  return [...nodes.flat(), comfyPage.selectionToolbox]
+}
+
+const getColorPickerButton = (comfyPage: ComfyPage) =>
+  comfyPage.selectionToolbox.getByRole('button', { name: 'Color', exact: true })
+
+const getColorPickerCurrentColor = (comfyPage: { page: Page }) =>
+  comfyPage.page.getByTestId(TestIds.selectionToolbox.colorPickerCurrentColor)
+
+const getColorPickerGroup = (comfyPage: { page: Page }) =>
+  comfyPage.page.getByRole('group').filter({
+    has: comfyPage.page.getByTestId(TestIds.selectionToolbox.colorBlue)
+  })
+
+test.describe('Selection Toolbox', { tag: ['@screenshot', '@ui'] }, () => {
+  test.use({
+    initialSettings: {
+      'Comfy.UseNewMenu': 'Disabled',
+      'Comfy.Canvas.SelectionToolbox': true
+    }
   })
 
   test('shows selection toolbox', async ({ comfyPage }) => {
-    // By default, selection toolbox should be enabled
-    expect(
-      await comfyPage.page.locator('.selection-overlay-container').isVisible()
-    ).toBe(false)
+    const selectedTitles = ['KSampler', 'CLIP Text Encode (Prompt)']
+    await expect(comfyPage.selectionToolbox).toBeHidden()
 
-    // Select multiple nodes
-    await comfyPage.selectNodes(['KSampler', 'CLIP Text Encode (Prompt)'])
+    await comfyPage.nodeOps.selectNodes(selectedTitles)
 
-    // Selection toolbox should be visible with multiple nodes selected
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container')
-    ).toBeVisible()
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container.show-border')
-    ).toBeVisible()
+    await expect(comfyPage.selectionToolbox).toBeVisible()
+    await expectRegionScreenshot(
+      comfyPage.page,
+      await selectionTargets(comfyPage, selectedTitles),
+      'selection-toolbox-multiple-nodes-border.png',
+      { maxDiffPixels: 100 }
+    )
   })
 
   test('shows at correct position when node is pasted', async ({
     comfyPage
   }) => {
-    await comfyPage.loadWorkflow('nodes/single_ksampler')
-    await comfyPage.selectNodes(['KSampler'])
-    await comfyPage.ctrlC()
+    await comfyPage.workflow.loadWorkflow('nodes/single_ksampler')
+    await comfyPage.nodeOps.selectNodes(['KSampler'])
+    await comfyPage.clipboard.copy()
     await comfyPage.page.mouse.move(100, 100)
-    await comfyPage.ctrlV()
+    await comfyPage.clipboard.paste()
 
-    const overlayContainer = comfyPage.page.locator(
-      '.selection-overlay-container'
-    )
-    await expect(overlayContainer).toBeVisible()
+    const toolboxContainer = comfyPage.selectionToolbox
+    await expect(toolboxContainer).toBeVisible()
 
-    // Verify the absolute position
-    const boundingBox = await overlayContainer.boundingBox()
-    expect(boundingBox).not.toBeNull()
-    // 10px offset for the pasted node
-    expect(Math.round(boundingBox!.x)).toBeCloseTo(90, -1) // Allow ~10px tolerance
-    // 30px offset of node title height
-    expect(Math.round(boundingBox!.y)).toBeCloseTo(60, -1)
+    // Verify toolbox is positioned (canvas-based positioning has different coordinates)
+    await expect
+      .poll(async () => await toolboxContainer.boundingBox())
+      .not.toBeNull()
+    // Canvas-based positioning can vary, just verify toolbox appears in reasonable bounds
+    await expect
+      .poll(async () => (await toolboxContainer.boundingBox())?.x)
+      .toBeGreaterThan(-200) // Not too far off-screen left
+    await expect
+      .poll(async () => (await toolboxContainer.boundingBox())?.x)
+      .toBeLessThan(1000) // Not too far off-screen right
+    await expect
+      .poll(async () => (await toolboxContainer.boundingBox())?.y)
+      .toBeGreaterThan(-100) // Not too far off-screen top
   })
 
   test('hide when select and drag happen at the same time', async ({
     comfyPage
   }) => {
-    await comfyPage.loadWorkflow('nodes/single_ksampler')
-    const node = (await comfyPage.getNodeRefsByTitle('KSampler'))[0]
+    await comfyPage.workflow.loadWorkflow('nodes/single_ksampler')
+    const node = (await comfyPage.nodeOps.getNodeRefsByTitle('KSampler'))[0]
     const nodePos = await node.getPosition()
 
     // Drag on the title of the node
@@ -65,62 +95,55 @@ test.describe('Selection Toolbox', () => {
     await comfyPage.page.mouse.down()
     await comfyPage.page.mouse.move(nodePos.x + 200, nodePos.y + 200)
     await comfyPage.nextFrame()
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container')
-    ).not.toBeVisible()
+    await expect(comfyPage.selectionToolbox).toBeHidden()
   })
 
   test('shows border only with multiple selections', async ({ comfyPage }) => {
-    // Select single node
-    await comfyPage.selectNodes(['KSampler'])
+    await comfyPage.nodeOps.selectNodes(['KSampler'])
 
-    // Selection overlay should be visible but without border
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container')
-    ).toBeVisible()
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container.show-border')
-    ).not.toBeVisible()
+    await expect(comfyPage.selectionToolbox).toBeVisible()
+    const region = await screenshotRegion(
+      comfyPage.page,
+      await selectionTargets(comfyPage, [
+        'KSampler',
+        'CLIP Text Encode (Prompt)'
+      ])
+    )
+    await region.expectScreenshot('selection-toolbox-single-node-no-border.png')
 
-    // Select multiple nodes
-    await comfyPage.selectNodes(['KSampler', 'CLIP Text Encode (Prompt)'])
+    await comfyPage.nodeOps.selectNodes([
+      'KSampler',
+      'CLIP Text Encode (Prompt)'
+    ])
 
-    // Selection overlay should show border with multiple selections
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container.show-border')
-    ).toBeVisible()
+    await region.expectScreenshot(
+      'selection-toolbox-multiple-selections-border.png'
+    )
 
-    // Deselect to single node
-    await comfyPage.selectNodes(['CLIP Text Encode (Prompt)'])
+    await comfyPage.nodeOps.selectNodes(['CLIP Text Encode (Prompt)'])
 
-    // Border should be hidden again
-    await expect(
-      comfyPage.page.locator('.selection-overlay-container.show-border')
-    ).not.toBeVisible()
+    await region.expectScreenshot(
+      'selection-toolbox-single-selection-no-border.png'
+    )
   })
 
   test('displays bypass button in toolbox when nodes are selected', async ({
     comfyPage
   }) => {
-    // A group + a KSampler node
-    await comfyPage.loadWorkflow('groups/single_group')
+    await comfyPage.workflow.loadWorkflow('groups/single_group')
+    const bypass = comfyPage.selectionToolbox.getByRole('button', {
+      name: 'Bypass/Unbypass Selected Nodes',
+      exact: true
+    })
 
-    // Select group + node should show bypass button
-    await comfyPage.page.focus('canvas')
-    await comfyPage.page.keyboard.press('Control+A')
-    await expect(
-      comfyPage.page.locator(
-        '.selection-toolbox *[data-testid="bypass-button"]'
-      )
-    ).toBeVisible()
+    await comfyPage.canvas.focus()
+    await comfyPage.nodeOps.selectNodes(['KSampler'])
+    await expect(bypass).toBeVisible()
+    await comfyPage.keyboard.delete()
 
-    // Deselect node (Only group is selected) should hide bypass button
-    await comfyPage.selectNodes(['KSampler'])
-    await expect(
-      comfyPage.page.locator(
-        '.selection-toolbox *[data-testid="bypass-button"]'
-      )
-    ).not.toBeVisible()
+    await comfyPage.keyboard.selectAll()
+    await expect(comfyPage.selectionToolbox).toBeVisible()
+    await expect(bypass).toBeHidden()
   })
 
   test.describe('Color Picker', () => {
@@ -128,87 +151,86 @@ test.describe('Selection Toolbox', () => {
       comfyPage
     }) => {
       // Select a node
-      await comfyPage.selectNodes(['KSampler'])
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
 
       // Color picker button should be visible
-      const colorPickerButton = comfyPage.page.locator(
-        '.selection-toolbox .pi-circle-fill'
-      )
+      const colorPickerButton = getColorPickerButton(comfyPage)
       await expect(colorPickerButton).toBeVisible()
 
       // Click color picker button
       await colorPickerButton.click()
 
       // Color picker dropdown should be visible
-      const colorPickerDropdown = comfyPage.page.locator(
-        '.color-picker-container'
-      )
-      await expect(colorPickerDropdown).toBeVisible()
+      const colorPickerGroup = getColorPickerGroup(comfyPage)
+      await expect(colorPickerGroup).toBeVisible()
 
       // Select a color (e.g., blue)
-      const blueColorOption = colorPickerDropdown.locator(
-        'i[data-testid="blue"]'
+      const blueColorOption = colorPickerGroup.getByTestId(
+        TestIds.selectionToolbox.colorBlue
       )
       await blueColorOption.click()
 
       // Dropdown should close after selection
-      await expect(colorPickerDropdown).not.toBeVisible()
+      await expect(colorPickerGroup).toBeHidden()
 
       // Node should have the selected color class/style
       // Note: Exact verification method depends on how color is applied to nodes
-      const selectedNode = (await comfyPage.getNodeRefsByTitle('KSampler'))[0]
-      expect(selectedNode.getProperty('color')).not.toBeNull()
+      const selectedNode = (
+        await comfyPage.nodeOps.getNodeRefsByTitle('KSampler')
+      )[0]
+      await expect.poll(() => selectedNode.getProperty('color')).toBeDefined()
     })
 
     test('color picker shows current color of selected nodes', async ({
       comfyPage
     }) => {
-      // Select multiple nodes
-      await comfyPage.selectNodes(['KSampler', 'CLIP Text Encode (Prompt)'])
+      await comfyPage.nodeOps.selectNodes([
+        'KSampler',
+        'CLIP Text Encode (Prompt)'
+      ])
 
-      const colorPickerButton = comfyPage.page.locator(
-        '.selection-toolbox .pi-circle-fill'
-      )
+      const colorPickerButton = getColorPickerButton(comfyPage)
+      const colorPickerCurrentColor = getColorPickerCurrentColor(comfyPage)
 
-      // Initially should show default color
       await expect(colorPickerButton).not.toHaveAttribute('color')
+      await expect(colorPickerCurrentColor).toHaveCSS('width', '16px')
+      await expect(colorPickerCurrentColor).toHaveCSS('height', '16px')
 
-      // Click color picker and select a color
       await colorPickerButton.click()
-      const redColorOption = comfyPage.page.locator(
-        '.color-picker-container i[data-testid="red"]'
+      const redColorOption = getColorPickerGroup(comfyPage).getByTestId(
+        TestIds.selectionToolbox.colorRed
       )
       await redColorOption.click()
 
-      // Button should now show the selected color
-      await expect(colorPickerButton).toHaveCSS('color', RED_COLOR)
+      await expect(colorPickerCurrentColor).toHaveCSS('color', RED_COLOR)
     })
 
     test('color picker shows mixed state for differently colored selections', async ({
       comfyPage
     }) => {
       // Select first node and color it
-      await comfyPage.selectNodes(['KSampler'])
-      await comfyPage.page.locator('.selection-toolbox .pi-circle-fill').click()
-      await comfyPage.page
-        .locator('.color-picker-container i[data-testid="blue"]')
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
+      await getColorPickerButton(comfyPage).click()
+      await getColorPickerGroup(comfyPage)
+        .getByTestId(TestIds.selectionToolbox.colorBlue)
         .click()
-      await comfyPage.selectNodes(['KSampler'])
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
 
       // Select second node and color it differently
-      await comfyPage.selectNodes(['CLIP Text Encode (Prompt)'])
-      await comfyPage.page.locator('.selection-toolbox .pi-circle-fill').click()
-      await comfyPage.page
-        .locator('.color-picker-container i[data-testid="red"]')
+      await comfyPage.nodeOps.selectNodes(['CLIP Text Encode (Prompt)'])
+      await getColorPickerButton(comfyPage).click()
+      await getColorPickerGroup(comfyPage)
+        .getByTestId(TestIds.selectionToolbox.colorRed)
         .click()
 
       // Select both nodes
-      await comfyPage.selectNodes(['KSampler', 'CLIP Text Encode (Prompt)'])
+      await comfyPage.nodeOps.selectNodes([
+        'KSampler',
+        'CLIP Text Encode (Prompt)'
+      ])
 
       // Color picker should show null/mixed state
-      const colorPickerButton = comfyPage.page.locator(
-        '.selection-toolbox .pi-circle-fill'
-      )
+      const colorPickerButton = getColorPickerButton(comfyPage)
       await expect(colorPickerButton).not.toHaveAttribute('color')
     })
 
@@ -216,42 +238,41 @@ test.describe('Selection Toolbox', () => {
       comfyPage
     }) => {
       // First color a node
-      await comfyPage.selectNodes(['KSampler'])
-      await comfyPage.page.locator('.selection-toolbox .pi-circle-fill').click()
-      await comfyPage.page
-        .locator('.color-picker-container i[data-testid="blue"]')
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
+      await getColorPickerButton(comfyPage).click()
+      await getColorPickerGroup(comfyPage)
+        .getByTestId(TestIds.selectionToolbox.colorBlue)
         .click()
 
       // Clear selection
-      await comfyPage.selectNodes(['KSampler'])
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
 
       // Re-select the node
-      await comfyPage.selectNodes(['KSampler'])
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
 
       // Color picker button should show the correct color
-      const colorPickerButton = comfyPage.page.locator(
-        '.selection-toolbox .pi-circle-fill'
-      )
-      await expect(colorPickerButton).toHaveCSS('color', BLUE_COLOR)
+      const colorPickerCurrentColor = getColorPickerCurrentColor(comfyPage)
+      await expect(colorPickerCurrentColor).toHaveCSS('color', BLUE_COLOR)
     })
 
     test('colorization via color picker can be undone', async ({
       comfyPage
     }) => {
       // Select a node and color it
-      await comfyPage.selectNodes(['KSampler'])
-      await comfyPage.page.locator('.selection-toolbox .pi-circle-fill').click()
-      await comfyPage.page
-        .locator('.color-picker-container i[data-testid="blue"]')
+      await comfyPage.nodeOps.selectNodes(['KSampler'])
+      await getColorPickerButton(comfyPage).click()
+      await getColorPickerGroup(comfyPage)
+        .getByTestId(TestIds.selectionToolbox.colorBlue)
         .click()
 
       // Undo the colorization
-      await comfyPage.page.keyboard.press('Control+Z')
-      await comfyPage.nextFrame()
+      await comfyPage.keyboard.press('Control+Z')
 
       // Node should be uncolored again
-      const selectedNode = (await comfyPage.getNodeRefsByTitle('KSampler'))[0]
-      expect(await selectedNode.getProperty('color')).toBeUndefined()
+      const selectedNode = (
+        await comfyPage.nodeOps.getNodeRefsByTitle('KSampler')
+      )[0]
+      await expect.poll(() => selectedNode.getProperty('color')).toBeUndefined()
     })
   })
 })

@@ -1,15 +1,19 @@
+import { useRafFn } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import type { Ref } from 'vue'
 
-import { useCanvasTransformSync } from '@/composables/canvas/useCanvasTransformSync'
 import type { LGraph } from '@/lib/litegraph/src/litegraph'
 import {
   calculateMinimapScale,
-  calculateNodeBounds,
   enforceMinimumBounds
 } from '@/renderer/core/spatial/boundsCalculator'
+import { MinimapDataSource } from '@/renderer/extensions/minimap/data/MinimapDataSource'
 
-import type { MinimapBounds, MinimapCanvas, ViewportTransform } from '../types'
+import type {
+  SizedExtents as MinimapBounds,
+  Bounds as ViewportTransform
+} from '@comfyorg/shared-frontend-utils/geometry'
+import type { MinimapCanvas } from '@/renderer/extensions/minimap/types'
 
 export function useMinimapViewport(
   canvas: Ref<MinimapCanvas | null>,
@@ -44,7 +48,7 @@ export function useMinimapViewport(
     if (!c) return
 
     const canvasEl = c.canvas
-    const dpr = window.devicePixelRatio || 1
+    const dpr = c.dpr
 
     canvasDimensions.value = {
       width: canvasEl.clientWidth || canvasEl.width / dpr,
@@ -53,17 +57,14 @@ export function useMinimapViewport(
   }
 
   const calculateGraphBounds = (): MinimapBounds => {
-    const g = graph.value
-    if (!g || !g._nodes || g._nodes.length === 0) {
+    const dataSource = new MinimapDataSource(graph.value)
+
+    if (!dataSource.hasData()) {
       return { minX: 0, minY: 0, maxX: 100, maxY: 100, width: 100, height: 100 }
     }
 
-    const bounds = calculateNodeBounds(g._nodes)
-    if (!bounds) {
-      return { minX: 0, minY: 0, maxX: 100, maxY: 100, width: 100, height: 100 }
-    }
-
-    return enforceMinimumBounds(bounds)
+    const sourceBounds = dataSource.getBounds()
+    return enforceMinimumBounds(sourceBounds)
   }
 
   const calculateScale = () => {
@@ -92,12 +93,16 @@ export function useMinimapViewport(
     const centerOffsetX = (width - bounds.value.width * scale.value) / 2
     const centerOffsetY = (height - bounds.value.height * scale.value) / 2
 
-    viewportTransform.value = {
-      x: (worldX - bounds.value.minX) * scale.value + centerOffsetX,
-      y: (worldY - bounds.value.minY) * scale.value + centerOffsetY,
-      width: viewportWidth * scale.value,
-      height: viewportHeight * scale.value
-    }
+    const x = (worldX - bounds.value.minX) * scale.value + centerOffsetX
+    const y = (worldY - bounds.value.minY) * scale.value + centerOffsetY
+    const w = viewportWidth * scale.value
+    const h = viewportHeight * scale.value
+
+    const curr = viewportTransform.value
+    if (curr.x === x && curr.y === y && curr.width === w && curr.height === h)
+      return
+
+    viewportTransform.value = { x, y, width: w, height: h }
   }
 
   const updateBounds = () => {
@@ -126,9 +131,8 @@ export function useMinimapViewport(
 
     c.setDirty(true, true)
   }
-
-  const { startSync: startViewportSync, stopSync: stopViewportSync } =
-    useCanvasTransformSync(updateViewport, { autoStart: false })
+  const { resume: startViewportSync, pause: stopViewportSync } =
+    useRafFn(updateViewport)
 
   return {
     bounds: computed(() => bounds.value),

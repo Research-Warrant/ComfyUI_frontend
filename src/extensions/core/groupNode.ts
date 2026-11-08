@@ -1,214 +1,152 @@
 import { PREFIX, SEPARATOR } from '@/constants/groupNodeConstants'
 import { t } from '@/i18n'
-import { type NodeId } from '@/lib/litegraph/src/LGraphNode'
-import {
-  type ExecutableLGraphNode,
-  type ExecutionId,
-  LGraphCanvas,
-  LGraphNode,
-  LiteGraph,
-  SubgraphNode
+import type { ISlotType } from '@comfyorg/graph-model/interfaces'
+import type { ISerialisedNode } from '@comfyorg/graph-model/serialisation'
+import type {
+  LGraphNodeConstructor,
+  LGraphNode
 } from '@/lib/litegraph/src/litegraph'
-import {
-  ComfyLink,
+import { LiteGraph } from '@/lib/litegraph/src/litegraph'
+import { outputLinks } from '@/lib/litegraph/src/node/slotLinks'
+import { selectedCanvasNodes } from '@/renderer/core/canvas/litegraph/selectionAdapter'
+import { slotTypeKey } from '@/lib/litegraph/src/utils/type'
+import type { SerializedNodeId } from '@comfyorg/graph-model/nodeId'
+import { parseNodeId } from '@comfyorg/graph-model/nodeId'
+import type {
   ComfyNode,
   ComfyWorkflowJSON
-} from '@/schemas/comfyWorkflowSchema'
-import type { ComfyNodeDef } from '@/schemas/nodeDefSchema'
-import { useDialogService } from '@/services/dialogService'
-import { useExecutionStore } from '@/stores/executionStore'
+} from '@comfyorg/graph-model/workflowSchema'
+import type { MissingNodeType } from '@/platform/workflowErrors/nodeReplacement/types'
+import type {
+  ComfyNodeDef,
+  ComfyOutputTypesSpec,
+  InputSpec
+} from '@comfyorg/object-info-parser'
 import { useNodeDefStore } from '@/stores/nodeDefStore'
-import { useToastStore } from '@/stores/toastStore'
 import { useWidgetStore } from '@/stores/widgetStore'
-import { ComfyExtension } from '@/types/comfy'
-import { ExecutableGroupNodeChildDTO } from '@/utils/executableGroupNodeChildDTO'
-import { GROUP } from '@/utils/executableGroupNodeDto'
-import { deserialiseAndCreate, serialise } from '@/utils/vintageClipboard'
+import type { ComfyExtension } from '@/types/comfy'
+import { deserialiseAndCreate } from '@/utils/vintageClipboard'
 
-import { api } from '../../scripts/api'
-import { app } from '../../scripts/app'
-import { ManageGroupDialog } from './groupNodeManage'
+import { app } from '@/scripts/app'
 import { mergeIfValid } from './widgetInputs'
 
-type GroupNodeWorkflowData = {
-  external: ComfyLink[]
-  links: ComfyLink[]
-  nodes: ComfyNode[]
+/**
+ * Marker symbol stamped on a synthesized group-node type's `nodeData` (via
+ * {@link markGroupNodeType}) so loaded group-node instances can be detected and
+ * migrated to subgraphs.
+ */
+const GROUP = Symbol()
+
+/**
+ * Stamp the group-node marker onto the registered node type so instances created
+ * during load can be detected by {@link GroupNodeHandler.isGroupNode}. This is
+ * stamped directly on the constructor rather than copied through
+ * {@link ComfyNodeDefImpl} construction, keeping the migration self-contained.
+ */
+function markGroupNodeType(typeName: string, config: GroupNodeConfig): void {
+  const ctor = LiteGraph.registered_node_types[typeName] as
+    | LGraphNodeConstructor
+    | undefined
+  if (ctor?.nodeData) ctor.nodeData[GROUP] = config
 }
 
-const Workflow = {
-  InUse: {
-    Free: 0,
-    Registered: 1,
-    InWorkflow: 2
-  },
-  // @ts-expect-error fixme ts strict error
-  isInUseGroupNode(name) {
-    const id = `${PREFIX}${SEPARATOR}${name}`
-    // Check if lready registered/in use in this workflow
-    // @ts-expect-error fixme ts strict error
-    if (app.graph.extra?.groupNodes?.[name]) {
-      if (app.graph.nodes.find((n) => n.type === id)) {
-        return Workflow.InUse.InWorkflow
-      } else {
-        return Workflow.InUse.Registered
-      }
-    }
-    return Workflow.InUse.Free
-  },
-  storeGroupNode(name: string, data: GroupNodeWorkflowData) {
-    let extra = app.graph.extra
-    if (!extra) app.graph.extra = extra = {}
-    let groupNodes = extra.groupNodes
-    if (!groupNodes) extra.groupNodes = groupNodes = {}
-    // @ts-expect-error fixme ts strict error
-    groupNodes[name] = data
-  }
+/**
+ * Link stored in a group node's workflow data. `sourceNodeIndex` is `null` when
+ * the source node was outside the group when it was created.
+ */
+export type GroupNodeLink = [
+  sourceNodeIndex: number | null,
+  sourceSlot: number,
+  targetNodeIndex: number,
+  targetSlot: number,
+  sourceNodeId: SerializedNodeId,
+  type?: unknown
+]
+type SlotLinks = Partial<Record<number, GroupNodeLink>>
+type LinksFromMap = Partial<
+  Record<number, Partial<Record<number, GroupNodeLink[]>>>
+>
+
+function isSlotType(value: unknown): value is ISlotType {
+  return (
+    typeof value === 'number' ||
+    typeof value === 'string' ||
+    (Array.isArray(value) && value.every((item) => typeof item === 'string'))
+  )
+}
+type LinksToMap = Partial<Record<number, SlotLinks>>
+type ExternalFromMap = Partial<
+  Record<number, Partial<Record<number, string | number>>>
+>
+
+interface GroupNodeConfigEntry {
+  input?: Record<string, { name?: string; visible?: boolean }>
+  output?: Record<number, { name?: string; visible?: boolean }>
 }
 
-class GroupNodeBuilder {
-  nodes: LGraphNode[]
-  // @ts-expect-error fixme ts strict error
-  nodeData: GroupNodeWorkflowData
+interface GroupNodeData extends Partial<
+  Pick<
+    ISerialisedNode,
+    'type' | 'title' | 'inputs' | 'outputs' | 'widgets_values'
+  >
+> {
+  index?: number
+}
 
-  constructor(nodes: LGraphNode[]) {
-    this.nodes = nodes
+export interface GroupNodeWorkflowData {
+  external?: (number | string)[][]
+  links: GroupNodeLink[]
+  nodes: GroupNodeData[]
+  config?: Record<number, GroupNodeConfigEntry>
+}
+
+function isOutputTypeSpec(
+  value: unknown
+): value is ComfyOutputTypesSpec[number] {
+  return (
+    typeof value === 'string' ||
+    (Array.isArray(value) &&
+      value.every(
+        (option) => typeof option === 'string' || typeof option === 'number'
+      ))
+  )
+}
+
+interface GroupNodeDef {
+  input: {
+    required: Record<string, unknown>
+    optional?: Record<string, unknown>
   }
-
-  async build() {
-    const name = await this.getName()
-    if (!name) return
-
-    // Sort the nodes so they are in execution order
-    // this allows for widgets to be in the correct order when reconstructing
-    this.sortNodes()
-
-    this.nodeData = this.getNodeData()
-    Workflow.storeGroupNode(name, this.nodeData)
-
-    return { name, nodeData: this.nodeData }
-  }
-
-  async getName() {
-    const name = await useDialogService().prompt({
-      title: t('groupNode.create'),
-      message: t('groupNode.enterName'),
-      defaultValue: ''
-    })
-    if (!name) return
-    const used = Workflow.isInUseGroupNode(name)
-    switch (used) {
-      case Workflow.InUse.InWorkflow:
-        useToastStore().addAlert(
-          'An in use group node with this name already exists embedded in this workflow, please remove any instances or use a new name.'
-        )
-        return
-      case Workflow.InUse.Registered:
-        if (
-          !confirm(
-            'A group node with this name already exists embedded in this workflow, are you sure you want to overwrite it?'
-          )
-        ) {
-          return
-        }
-        break
-    }
-    return name
-  }
-
-  sortNodes() {
-    // Gets the builders nodes in graph execution order
-    const nodesInOrder = app.graph.computeExecutionOrder(false)
-    this.nodes = this.nodes
-      .map((node) => ({ index: nodesInOrder.indexOf(node), node }))
-      // @ts-expect-error id might be string
-      .sort((a, b) => a.index - b.index || a.node.id - b.node.id)
-      .map(({ node }) => node)
-  }
-
-  getNodeData() {
-    // @ts-expect-error fixme ts strict error
-    const storeLinkTypes = (config) => {
-      // Store link types for dynamically typed nodes e.g. reroutes
-      for (const link of config.links) {
-        const origin = app.graph.getNodeById(link[4])
-        // @ts-expect-error fixme ts strict error
-        const type = origin.outputs[link[1]].type
-        link.push(type)
-      }
-    }
-
-    // @ts-expect-error fixme ts strict error
-    const storeExternalLinks = (config) => {
-      // Store any external links to the group in the config so when rebuilding we add extra slots
-      config.external = []
-      for (let i = 0; i < this.nodes.length; i++) {
-        const node = this.nodes[i]
-        if (!node.outputs?.length) continue
-        for (let slot = 0; slot < node.outputs.length; slot++) {
-          let hasExternal = false
-          const output = node.outputs[slot]
-          let type = output.type
-          if (!output.links?.length) continue
-          for (const l of output.links) {
-            const link = app.graph.links[l]
-            if (!link) continue
-            if (type === '*') type = link.type
-
-            if (!app.canvas.selected_nodes[link.target_id]) {
-              hasExternal = true
-              break
-            }
-          }
-          if (hasExternal) {
-            config.external.push([i, slot, type])
-          }
-        }
-      }
-    }
-
-    // Use the built in copyToClipboard function to generate the node data we need
-    try {
-      // @ts-expect-error fixme ts strict error
-      const serialised = serialise(this.nodes, app.canvas.graph)
-      const config = JSON.parse(serialised)
-
-      storeLinkTypes(config)
-      storeExternalLinks(config)
-
-      return config
-    } finally {
-    }
-  }
+  output: unknown[]
+  output_name: string[]
+  output_is_list: boolean[]
 }
 
 export class GroupNodeConfig {
   name: string
-  nodeData: any
+  nodeData: GroupNodeWorkflowData
   inputCount: number
-  oldToNewOutputMap: {}
-  newToOldOutputMap: {}
-  oldToNewInputMap: {}
-  oldToNewWidgetMap: {}
-  newToOldWidgetMap: {}
-  primitiveDefs: {}
-  widgetToPrimitive: {}
-  primitiveToWidget: {}
-  nodeInputs: {}
-  outputVisibility: any[]
-  // @ts-expect-error fixme ts strict error
-  nodeDef: ComfyNodeDef
-  // @ts-expect-error fixme ts strict error
-  inputs: any[]
-  // @ts-expect-error fixme ts strict error
-  linksFrom: {}
-  // @ts-expect-error fixme ts strict error
-  linksTo: {}
-  // @ts-expect-error fixme ts strict error
-  externalFrom: {}
+  oldToNewOutputMap: Partial<Record<number, Record<number, number>>>
+  newToOldOutputMap: Partial<
+    Record<number, { node: GroupNodeData; slot: number }>
+  >
+  oldToNewInputMap: Partial<Record<number, Record<string, number>>>
+  oldToNewWidgetMap: Partial<Record<number, Record<string, string | null>>>
+  newToOldWidgetMap: Record<string, { node: GroupNodeData; inputName: string }>
+  primitiveDefs: Partial<Record<number, GroupNodeDef>>
+  widgetToPrimitive: Partial<Record<number, Record<string, number | number[]>>>
+  primitiveToWidget: Partial<
+    Record<number, { nodeId: number | string | null; inputName: string }[]>
+  >
+  nodeInputs: Partial<Record<number, Record<string, string>>>
+  outputVisibility: boolean[]
+  nodeDef: ComfyNodeDef | undefined
+  inputs!: unknown[]
+  linksFrom!: LinksFromMap
+  linksTo!: LinksToMap
+  externalFrom!: ExternalFromMap
 
-  // @ts-expect-error fixme ts strict error
-  constructor(name, nodeData) {
+  constructor(name: string, nodeData: GroupNodeWorkflowData) {
     this.name = name
     this.nodeData = nodeData
     this.getLinks()
@@ -231,19 +169,15 @@ export class GroupNodeConfig {
       output: [],
       output_name: [],
       output_is_list: [],
-      // @ts-expect-error Unused, doesn't exist
-      output_is_hidden: [],
+      output_node: false, // This is a lie (to satisfy the interface)
       name: source + SEPARATOR + this.name,
       display_name: this.name,
       category: 'group nodes' + (SEPARATOR + source),
       input: { required: {} },
       description: `Group node combining ${this.nodeData.nodes
-        // @ts-expect-error fixme ts strict error
         .map((n) => n.type)
         .join(', ')}`,
-      python_module: 'custom_nodes.' + this.name,
-
-      [GROUP]: this
+      python_module: 'custom_nodes.' + this.name
     }
 
     this.inputs = []
@@ -255,13 +189,13 @@ export class GroupNodeConfig {
       this.processNode(node, seenInputs, seenOutputs)
     }
 
-    for (const p of this.#convertedToProcess) {
-      // @ts-expect-error fixme ts strict error
+    for (const p of this._convertedToProcess) {
       p()
     }
-    // @ts-expect-error fixme ts strict error
-    this.#convertedToProcess = null
-    await app.registerNodeDef(`${PREFIX}${SEPARATOR}` + this.name, this.nodeDef)
+    this._convertedToProcess = []
+    const typeName = `${PREFIX}${SEPARATOR}${this.name}`
+    await app.registerNodeDef(typeName, this.nodeDef)
+    markGroupNodeType(typeName, this)
     useNodeDefStore().addNodeDef(this.nodeDef)
   }
 
@@ -271,50 +205,31 @@ export class GroupNodeConfig {
     this.externalFrom = {}
 
     // Extract links for easy lookup
-    for (const l of this.nodeData.links) {
-      const [sourceNodeId, sourceNodeSlot, targetNodeId, targetNodeSlot] = l
+    for (const link of this.nodeData.links) {
+      const [sourceNodeIndex, sourceSlot, targetNodeIndex, targetSlot] = link
 
       // Skip links outside the copy config
-      if (sourceNodeId == null) continue
+      if (sourceNodeIndex == null) continue
 
-      // @ts-expect-error fixme ts strict error
-      if (!this.linksFrom[sourceNodeId]) {
-        // @ts-expect-error fixme ts strict error
-        this.linksFrom[sourceNodeId] = {}
-      }
-      // @ts-expect-error fixme ts strict error
-      if (!this.linksFrom[sourceNodeId][sourceNodeSlot]) {
-        // @ts-expect-error fixme ts strict error
-        this.linksFrom[sourceNodeId][sourceNodeSlot] = []
-      }
-      // @ts-expect-error fixme ts strict error
-      this.linksFrom[sourceNodeId][sourceNodeSlot].push(l)
-
-      // @ts-expect-error fixme ts strict error
-      if (!this.linksTo[targetNodeId]) {
-        // @ts-expect-error fixme ts strict error
-        this.linksTo[targetNodeId] = {}
-      }
-      // @ts-expect-error fixme ts strict error
-      this.linksTo[targetNodeId][targetNodeSlot] = l
+      const fromSlots = (this.linksFrom[sourceNodeIndex] ??= {})
+      ;(fromSlots[sourceSlot] ??= []).push(link)
+      ;(this.linksTo[targetNodeIndex] ??= {})[targetSlot] = link
     }
 
-    if (this.nodeData.external) {
-      for (const ext of this.nodeData.external) {
-        // @ts-expect-error fixme ts strict error
-        if (!this.externalFrom[ext[0]]) {
-          // @ts-expect-error fixme ts strict error
-          this.externalFrom[ext[0]] = { [ext[1]]: ext[2] }
-        } else {
-          // @ts-expect-error fixme ts strict error
-          this.externalFrom[ext[0]][ext[1]] = ext[2]
-        }
-      }
+    for (const ext of this.nodeData.external ?? []) {
+      const nodeIdx = Number(ext[0])
+      const slotIdx = Number(ext[1])
+      const typeVal = ext.at(2)
+      if (typeVal == null) continue
+      ;(this.externalFrom[nodeIdx] ??= {})[slotIdx] = typeVal
     }
   }
 
-  // @ts-expect-error fixme ts strict error
-  processNode(node, seenInputs, seenOutputs) {
+  processNode(
+    node: GroupNodeData,
+    seenInputs: Record<string, number>,
+    seenOutputs: Record<string, number>
+  ) {
     const def = this.getNodeDef(node)
     if (!def) return
 
@@ -324,32 +239,53 @@ export class GroupNodeConfig {
     if (def.output?.length) this.processNodeOutputs(node, seenOutputs, def)
   }
 
-  // @ts-expect-error fixme ts strict error
-  getNodeDef(node) {
-    // @ts-expect-error fixme ts strict error
-    const def = globalDefs[node.type]
-    if (def) return def
+  getNodeDef(
+    node: GroupNodeData
+  ): GroupNodeDef | ComfyNodeDef | null | undefined {
+    if (node.type) {
+      const def = globalDefs[node.type]
+      if (def) return def
+    }
 
-    // @ts-expect-error fixme ts strict error
-    const linksFrom = this.linksFrom[node.index]
+    const nodeIndex = node.index
+    if (nodeIndex == null) return undefined
+
+    const linksFrom = this.linksFrom[nodeIndex]
     if (node.type === 'PrimitiveNode') {
       // Skip as its not linked
       if (!linksFrom) return
 
-      let type = linksFrom['0'][0][5]
+      const firstLink = linksFrom[0]?.at(0)
+      const linkedType: unknown = firstLink?.at(5)
+      let type: string | number | null = firstLink
+        ? linkedType == null
+          ? null
+          : isSlotType(linkedType)
+            ? slotTypeKey(linkedType)
+            : null
+        : null
       if (type === 'COMBO') {
         // Use the array items
-        const source = node.outputs[0].widget.name
-        const fromTypeName = this.nodeData.nodes[linksFrom['0'][0][2]].type
-        // @ts-expect-error fixme ts strict error
-        const fromType = globalDefs[fromTypeName]
-        const input =
-          fromType.input.required[source] ?? fromType.input.optional[source]
-        type = input[0]
+        const output = node.outputs?.[0]
+        const source = output?.widget?.name
+        const nodeIdx = firstLink?.[2]
+        if (source && nodeIdx != null) {
+          const fromTypeName = this.nodeData.nodes.at(nodeIdx)?.type
+          if (fromTypeName) {
+            const fromType = globalDefs[fromTypeName]
+            const input =
+              fromType?.input?.required?.[source] ??
+              fromType?.input?.optional?.[source]
+            const inputType = input?.[0]
+            type =
+              typeof inputType === 'string' || typeof inputType === 'number'
+                ? inputType
+                : null
+          }
+        }
       }
 
-      // @ts-expect-error fixme ts strict error
-      const def = (this.primitiveDefs[node.index] = {
+      const def = (this.primitiveDefs[nodeIndex] = {
         input: {
           required: {
             value: [type, {}]
@@ -361,74 +297,77 @@ export class GroupNodeConfig {
       })
       return def
     } else if (node.type === 'Reroute') {
-      // @ts-expect-error fixme ts strict error
-      const linksTo = this.linksTo[node.index]
-      // @ts-expect-error fixme ts strict error
-      if (linksTo && linksFrom && !this.externalFrom[node.index]?.[0]) {
+      const linksTo = this.linksTo[nodeIndex]
+      if (linksTo && linksFrom && !this.externalFrom[nodeIndex]?.[0]) {
         // Being used internally
         return null
       }
 
-      let config = {}
-      let rerouteType = '*'
+      let config: Record<string, unknown> = {}
+      let rerouteType: ISlotType = '*'
       if (linksFrom) {
-        for (const [, , id, slot] of linksFrom['0']) {
-          const node = this.nodeData.nodes[id]
-          const input = node.inputs[slot]
-          if (rerouteType === '*') {
+        const links = linksFrom[0] ?? []
+        for (const [, , targetNodeIndex, targetSlot] of links) {
+          const targetNode = this.nodeData.nodes.at(targetNodeIndex)
+          const input = targetNode?.inputs?.[targetSlot]
+          if (input?.type && rerouteType === '*') {
             rerouteType = input.type
           }
-          if (input.widget) {
-            // @ts-expect-error fixme ts strict error
-            const targetDef = globalDefs[node.type]
+          if (input?.widget && targetNode?.type) {
+            const targetDef = globalDefs[targetNode.type]
             const targetWidget =
-              targetDef.input.required[input.widget.name] ??
-              targetDef.input.optional[input.widget.name]
+              targetDef?.input?.required?.[input.widget.name] ??
+              targetDef?.input?.optional?.[input.widget.name]
 
-            const widget = [targetWidget[0], config]
-            const res = mergeIfValid(
-              {
-                // @ts-expect-error fixme ts strict error
-                widget
-              },
-              targetWidget,
-              false,
-              null,
-              widget
-            )
-            config = res?.customConfig ?? config
+            if (targetWidget) {
+              const widgetSpec = [targetWidget[0], config] as Parameters<
+                typeof mergeIfValid
+              >[4]
+              const res = mergeIfValid(
+                { widget: widgetSpec } as unknown as Parameters<
+                  typeof mergeIfValid
+                >[0],
+                targetWidget,
+                false,
+                undefined,
+                widgetSpec
+              )
+              config = res.customConfig ?? config
+            }
           }
         }
       } else if (linksTo) {
-        const [id, slot] = linksTo['0']
-        rerouteType = this.nodeData.nodes[id].outputs[slot].type
+        const link = linksTo[0]
+        if (link?.[0] != null) {
+          const output = this.nodeData.nodes.at(link[0])?.outputs?.[link[1]]
+          if (output) rerouteType = output.type
+        }
       } else {
         // Reroute used as a pipe
         for (const l of this.nodeData.links) {
-          if (l[2] === node.index) {
+          if (l[2] === node.index && isSlotType(l[5])) {
             rerouteType = l[5]
             break
           }
         }
         if (rerouteType === '*') {
           // Check for an external link
-          // @ts-expect-error fixme ts strict error
-          const t = this.externalFrom[node.index]?.[0]
+          const t = this.externalFrom[nodeIndex]?.[0]
           if (t) {
             rerouteType = t
           }
         }
       }
 
-      // @ts-expect-error
       config.forceInput = true
+      const rerouteTypeKey = slotTypeKey(rerouteType)
       return {
         input: {
           required: {
-            [rerouteType]: [rerouteType, config]
+            [rerouteTypeKey]: [rerouteTypeKey, config]
           }
         },
-        output: [rerouteType],
+        output: [rerouteTypeKey],
         output_name: [],
         output_is_list: []
       }
@@ -442,12 +381,17 @@ export class GroupNodeConfig {
     )
   }
 
-  // @ts-expect-error fixme ts strict error
-  getInputConfig(node, inputName, seenInputs, config, extra?) {
-    const customConfig = this.nodeData.config?.[node.index]?.input?.[inputName]
+  getInputConfig(
+    node: GroupNodeData,
+    inputName: string,
+    seenInputs: Record<string, number>,
+    config: InputSpec,
+    extra?: Record<string, unknown>
+  ) {
+    const nodeConfig = this.nodeData.config?.[node.index ?? -1]
+    const customConfig = nodeConfig?.input?.[inputName]
     let name =
       customConfig?.name ??
-      // @ts-expect-error fixme ts strict error
       node.inputs?.find((inp) => inp.name === inputName)?.label ??
       inputName
     let key = name
@@ -468,10 +412,13 @@ export class GroupNodeConfig {
     }
     if (config[0] === 'IMAGEUPLOAD') {
       if (!extra) extra = {}
-      extra.widget =
-        // @ts-expect-error fixme ts strict error
-        this.oldToNewWidgetMap[node.index]?.[config[1]?.widget ?? 'image'] ??
-        'image'
+      const nodeIndex = node.index ?? -1
+      const configOptions = config[1] ?? {}
+      const widgetKey =
+        'widget' in configOptions && typeof configOptions.widget === 'string'
+          ? configOptions.widget
+          : 'image'
+      extra.widget = this.oldToNewWidgetMap[nodeIndex]?.[widgetKey] ?? 'image'
     }
 
     if (extra) {
@@ -481,23 +428,53 @@ export class GroupNodeConfig {
     return { name, config, customConfig }
   }
 
-  // @ts-expect-error fixme ts strict error
-  processWidgetInputs(inputs, node, inputNames, seenInputs) {
-    const slots = []
-    const converted = new Map()
-    // @ts-expect-error fixme ts strict error
-    const widgetMap = (this.oldToNewWidgetMap[node.index] = {})
+  processWidgetInputs(
+    inputs: Record<string, unknown>,
+    node: GroupNodeData,
+    inputNames: string[],
+    seenInputs: Record<string, number>
+  ) {
+    const slots: string[] = []
+    const converted = new Map<number, string>()
+    const nodeIndex = node.index ?? -1
+    const widgetMap: Record<string, string | null> = (this.oldToNewWidgetMap[
+      nodeIndex
+    ] = {})
     for (const inputName of inputNames) {
-      if (useWidgetStore().inputIsWidget(inputs[inputName])) {
-        const convertedIndex = node.inputs?.findIndex(
-          // @ts-expect-error fixme ts strict error
-          (inp) => inp.name === inputName && inp.widget?.name === inputName
-        )
+      const inputSpec = inputs[inputName]
+      // The type is either a string (e.g. 'INT') or, for a combo widget, an
+      // array of options (e.g. [['euler', 'ddim']]) — both are valid V1
+      // input specs. Rejecting the array form here misclassified every combo
+      // widget as a plain input slot.
+      const isValidSpec =
+        Array.isArray(inputSpec) &&
+        inputSpec.length >= 1 &&
+        (typeof inputSpec[0] === 'string' || Array.isArray(inputSpec[0]))
+      // A `forceInput` spec is always a socket, even for a type (e.g. a
+      // combo) that would otherwise materialize as a widget — matches the
+      // rule `litegraphService.addInputSocket`/`addInputWidget` apply when
+      // actually building the node.
+      const specOptions =
+        Array.isArray(inputSpec) &&
+        typeof inputSpec[1] === 'object' &&
+        inputSpec[1] !== null
+          ? inputSpec[1]
+          : {}
+      const isForcedInput =
+        'forceInput' in specOptions && specOptions.forceInput === true
+      if (
+        isValidSpec &&
+        !isForcedInput &&
+        useWidgetStore().inputIsWidget(inputSpec as InputSpec)
+      ) {
+        const convertedIndex =
+          node.inputs?.findIndex(
+            (inp) => inp.name === inputName && inp.widget?.name === inputName
+          ) ?? -1
         if (convertedIndex > -1) {
           // This widget has been converted to a widget
           // We need to store this in the correct position so link ids line up
           converted.set(convertedIndex, inputName)
-          // @ts-expect-error fixme ts strict error
           widgetMap[inputName] = null
         } else {
           // Normal widget
@@ -505,13 +482,12 @@ export class GroupNodeConfig {
             node,
             inputName,
             seenInputs,
-            inputs[inputName]
+            inputSpec as InputSpec
           )
-          // @ts-expect-error fixme ts strict error
-          this.nodeDef.input.required[name] = config
-          // @ts-expect-error fixme ts strict error
+          if (this.nodeDef?.input?.required) {
+            this.nodeDef.input.required[name] = config
+          }
           widgetMap[inputName] = name
-          // @ts-expect-error fixme ts strict error
           this.newToOldWidgetMap[name] = { node, inputName }
         }
       } else {
@@ -522,65 +498,89 @@ export class GroupNodeConfig {
     return { converted, slots }
   }
 
-  // @ts-expect-error fixme ts strict error
-  checkPrimitiveConnection(link, inputName, inputs) {
-    const sourceNode = this.nodeData.nodes[link[0]]
-    if (sourceNode.type === 'PrimitiveNode') {
+  checkPrimitiveConnection(
+    link: GroupNodeLink,
+    inputName: string,
+    inputs: Record<string, InputSpec>
+  ) {
+    const [sourceNodeIndex, , targetNodeIndex] = link
+    if (sourceNodeIndex == null) return
+    const sourceNode = this.nodeData.nodes.at(sourceNodeIndex)
+    if (sourceNode?.type === 'PrimitiveNode') {
       // Merge link configurations
-      const [sourceNodeId, _, targetNodeId, __] = link
-      // @ts-expect-error fixme ts strict error
-      const primitiveDef = this.primitiveDefs[sourceNodeId]
+      const primitiveDef = this.primitiveDefs[sourceNodeIndex]
+      if (!primitiveDef) return
       const targetWidget = inputs[inputName]
-      const primitiveConfig = primitiveDef.input.required.value
-      const output = { widget: primitiveConfig }
+      const primitiveConfig = primitiveDef.input.required.value as [
+        unknown,
+        Record<string, unknown>
+      ]
       const config = mergeIfValid(
-        // @ts-expect-error invalid slot type
-        output,
+        {},
         targetWidget,
         false,
-        null,
-        primitiveConfig
+        undefined,
+        primitiveConfig as InputSpec
       )
+      const inputConfig = inputs[inputName]?.[1]
       primitiveConfig[1] =
-        config?.customConfig ?? inputs[inputName][1]
-          ? { ...inputs[inputName][1] }
+        (config.customConfig ?? inputConfig)
+          ? { ...(typeof inputConfig === 'object' ? inputConfig : {}) }
           : {}
 
-      // @ts-expect-error fixme ts strict error
-      let name = this.oldToNewWidgetMap[sourceNodeId]['value']
-      name = name.substr(0, name.length - 6)
-      primitiveConfig[1].control_after_generate = true
-      primitiveConfig[1].control_prefix = name
+      const widgetName = this.oldToNewWidgetMap[sourceNodeIndex]?.['value']
+      if (widgetName) {
+        const name = widgetName.substring(0, widgetName.length - 6)
+        primitiveConfig[1].control_after_generate = true
+        primitiveConfig[1].control_prefix = name
+      }
 
-      // @ts-expect-error fixme ts strict error
-      let toPrimitive = this.widgetToPrimitive[targetNodeId]
-      if (!toPrimitive) {
-        // @ts-expect-error fixme ts strict error
-        toPrimitive = this.widgetToPrimitive[targetNodeId] = {}
+      const toPrimitive = (this.widgetToPrimitive[targetNodeIndex] ??= {})
+      const existing = toPrimitive[inputName]
+      if (Array.isArray(existing)) {
+        existing.push(sourceNodeIndex)
+      } else if (typeof existing === 'number') {
+        toPrimitive[inputName] = [existing, sourceNodeIndex]
+      } else {
+        toPrimitive[inputName] = sourceNodeIndex
       }
-      if (toPrimitive[inputName]) {
-        toPrimitive[inputName].push(sourceNodeId)
-      }
-      toPrimitive[inputName] = sourceNodeId
 
-      // @ts-expect-error fixme ts strict error
-      let toWidget = this.primitiveToWidget[sourceNodeId]
-      if (!toWidget) {
-        // @ts-expect-error fixme ts strict error
-        toWidget = this.primitiveToWidget[sourceNodeId] = []
-      }
-      toWidget.push({ nodeId: targetNodeId, inputName })
+      ;(this.primitiveToWidget[sourceNodeIndex] ??= []).push({
+        nodeId: targetNodeIndex,
+        inputName
+      })
     }
   }
 
-  // @ts-expect-error fixme ts strict error
-  processInputSlots(inputs, node, slots, linksTo, inputMap, seenInputs) {
-    // @ts-expect-error fixme ts strict error
-    this.nodeInputs[node.index] = {}
+  processInputSlots(
+    inputs: Record<string, InputSpec>,
+    node: GroupNodeData,
+    slots: string[],
+    linksTo: SlotLinks,
+    inputMap: Record<string, number>,
+    seenInputs: Record<string, number>
+  ) {
+    const nodeIdx = node.index ?? -1
+    const nodeInputs: Record<string, string> = (this.nodeInputs[nodeIdx] = {})
     for (let i = 0; i < slots.length; i++) {
       const inputName = slots[i]
-      if (linksTo[i]) {
-        this.checkPrimitiveConnection(linksTo[i], inputName, inputs)
+      // `linksTo` is keyed by this inner node's own original input-slot
+      // index, which rarely lines up with `i` (this input's position within
+      // the *filtered* `slots` list). Look the real slot index up by name so
+      // an internally-linked input isn't matched against a different slot's
+      // link (or missed/misread entirely) and either wrongly hidden or
+      // wrongly exposed on the group node. A synthesized def can key its
+      // input by type rather than by slot name (e.g. Reroute, whose actual
+      // slot name is always ''), so fall back to the old positional index
+      // when the name lookup misses.
+      const namedSlotIndex = node.inputs?.findIndex(
+        (inp) => inp.name === inputName
+      )
+      const slotIndex =
+        namedSlotIndex != null && namedSlotIndex >= 0 ? namedSlotIndex : i
+      const link = linksTo[slotIndex]
+      if (link) {
+        this.checkPrimitiveConnection(link, inputName, inputs)
         // This input is linked so we can skip it
         continue
       }
@@ -592,44 +592,36 @@ export class GroupNodeConfig {
         inputs[inputName]
       )
 
-      // @ts-expect-error fixme ts strict error
-      this.nodeInputs[node.index][inputName] = name
+      nodeInputs[inputName] = name
       if (customConfig?.visible === false) continue
 
-      // @ts-expect-error fixme ts strict error
-      this.nodeDef.input.required[name] = config
-      inputMap[i] = this.inputCount++
+      if (this.nodeDef?.input?.required) {
+        this.nodeDef.input.required[name] = config
+      }
+      inputMap[inputName] = this.inputCount++
     }
   }
 
   processConvertedWidgets(
-    // @ts-expect-error fixme ts strict error
-    inputs,
-    // @ts-expect-error fixme ts strict error
-    node,
-    // @ts-expect-error fixme ts strict error
-    slots,
-    // @ts-expect-error fixme ts strict error
-    converted,
-    // @ts-expect-error fixme ts strict error
-    linksTo,
-    // @ts-expect-error fixme ts strict error
-    inputMap,
-    // @ts-expect-error fixme ts strict error
-    seenInputs
+    inputs: Record<string, InputSpec>,
+    node: GroupNodeData,
+    converted: Map<number, string>,
+    linksTo: SlotLinks,
+    inputMap: Record<string, number>,
+    seenInputs: Record<string, number>
   ) {
-    // Add converted widgets sorted into their index order (ordered as they were converted) so link ids match up
-    const convertedSlots = [...converted.keys()]
-      .sort()
-      .map((k) => converted.get(k))
-    for (let i = 0; i < convertedSlots.length; i++) {
-      const inputName = convertedSlots[i]
-      if (linksTo[slots.length + i]) {
-        this.checkPrimitiveConnection(
-          linksTo[slots.length + i],
-          inputName,
-          inputs
-        )
+    // Process converted widgets sorted into their index order (ordered as
+    // they were converted) so link ids match up. `converted`'s keys are
+    // this node's real serialized input-slot indices (set by the
+    // `findIndex` in processWidgetInputs), so use that key - not this
+    // widget's position among converted widgets - to look its link up in
+    // `linksTo`, which is also keyed by real slot index.
+    const convertedEntries = [...converted.entries()].sort(([a], [b]) => a - b)
+    for (const [slotIndex, inputName] of convertedEntries) {
+      if (!inputName) continue
+      const link = linksTo[slotIndex]
+      if (link) {
+        this.checkPrimitiveConnection(link, inputName, inputs)
         // This input is linked so we can skip it
         continue
       }
@@ -644,28 +636,25 @@ export class GroupNodeConfig {
         }
       )
 
-      // @ts-expect-error fixme ts strict error
-      this.nodeDef.input.required[name] = config
-      // @ts-expect-error fixme ts strict error
+      if (this.nodeDef?.input?.required) {
+        this.nodeDef.input.required[name] = config
+      }
       this.newToOldWidgetMap[name] = { node, inputName }
 
-      // @ts-expect-error fixme ts strict error
-      if (!this.oldToNewWidgetMap[node.index]) {
-        // @ts-expect-error fixme ts strict error
-        this.oldToNewWidgetMap[node.index] = {}
-      }
-      // @ts-expect-error fixme ts strict error
-      this.oldToNewWidgetMap[node.index][inputName] = name
+      const nodeIndex = node.index ?? -1
+      ;(this.oldToNewWidgetMap[nodeIndex] ??= {})[inputName] = name
 
-      inputMap[slots.length + i] = this.inputCount++
+      inputMap[inputName] = this.inputCount++
     }
   }
 
-  #convertedToProcess = []
-  // @ts-expect-error fixme ts strict error
-  processNodeInputs(node, seenInputs, inputs) {
-    // @ts-expect-error fixme ts strict error
-    const inputMapping = []
+  private _convertedToProcess: (() => void)[] = []
+  processNodeInputs(
+    node: GroupNodeData,
+    seenInputs: Record<string, number>,
+    inputs: Record<string, unknown>
+  ) {
+    const inputMapping: unknown[] = []
 
     const inputNames = Object.keys(inputs)
     if (!inputNames.length) return
@@ -676,19 +665,24 @@ export class GroupNodeConfig {
       inputNames,
       seenInputs
     )
-    // @ts-expect-error fixme ts strict error
-    const linksTo = this.linksTo[node.index] ?? {}
-    // @ts-expect-error fixme ts strict error
-    const inputMap = (this.oldToNewInputMap[node.index] = {})
-    this.processInputSlots(inputs, node, slots, linksTo, inputMap, seenInputs)
+    const nodeIndex = node.index ?? -1
+    const linksTo = this.linksTo[nodeIndex] ?? {}
+    const inputMap: Record<string, number> = (this.oldToNewInputMap[nodeIndex] =
+      {})
+    this.processInputSlots(
+      inputs as Record<string, InputSpec>,
+      node,
+      slots,
+      linksTo,
+      inputMap,
+      seenInputs
+    )
 
     // Converted inputs have to be processed after all other nodes as they'll be at the end of the list
-    // @ts-expect-error fixme ts strict error
-    this.#convertedToProcess.push(() =>
+    this._convertedToProcess.push(() =>
       this.processConvertedWidgets(
-        inputs,
+        inputs as Record<string, InputSpec>,
         node,
-        slots,
         converted,
         linksTo,
         inputMap,
@@ -696,101 +690,147 @@ export class GroupNodeConfig {
       )
     )
 
-    // @ts-expect-error fixme ts strict error
     return inputMapping
   }
 
-  // @ts-expect-error fixme ts strict error
-  processNodeOutputs(node, seenOutputs, def) {
-    // @ts-expect-error fixme ts strict error
-    const oldToNew = (this.oldToNewOutputMap[node.index] = {})
+  processNodeOutputs(
+    node: GroupNodeData,
+    seenOutputs: Record<string, number>,
+    def: GroupNodeDef | ComfyNodeDef
+  ) {
+    const nodeIndex = node.index ?? -1
+    const oldToNew: Record<number, number> = (this.oldToNewOutputMap[
+      nodeIndex
+    ] = {})
 
+    const defOutput = def.output ?? []
     // Add outputs
-    for (let outputId = 0; outputId < def.output.length; outputId++) {
-      // @ts-expect-error fixme ts strict error
-      const linksFrom = this.linksFrom[node.index]
+    for (let outputId = 0; outputId < defOutput.length; outputId++) {
+      const linksFrom = this.linksFrom[nodeIndex]
       // If this output is linked internally we flag it to hide
       const hasLink =
-        // @ts-expect-error fixme ts strict error
-        linksFrom?.[outputId] && !this.externalFrom[node.index]?.[outputId]
-      const customConfig =
-        this.nodeData.config?.[node.index]?.output?.[outputId]
+        linksFrom?.[outputId] && !this.externalFrom[nodeIndex]?.[outputId]
+      const outputConfig = this.nodeData.config?.[node.index ?? -1]
+      const customConfig = outputConfig?.output?.[outputId]
       const visible = customConfig?.visible ?? !hasLink
       this.outputVisibility.push(visible)
       if (!visible) {
         continue
       }
 
-      // @ts-expect-error fixme ts strict error
-      oldToNew[outputId] = this.nodeDef.output.length
-      // @ts-expect-error fixme ts strict error
-      this.newToOldOutputMap[this.nodeDef.output.length] = {
-        node,
-        slot: outputId
-      }
-      // @ts-expect-error fixme ts strict error
-      this.nodeDef.output.push(def.output[outputId])
-      // @ts-expect-error fixme ts strict error
-      this.nodeDef.output_is_list.push(def.output_is_list[outputId])
+      const output = defOutput[outputId]
+      if (!isOutputTypeSpec(output)) continue
 
-      let label = customConfig?.name
+      if (this.nodeDef?.output) {
+        oldToNew[outputId] = this.nodeDef.output.length
+        this.newToOldOutputMap[this.nodeDef.output.length] = {
+          node,
+          slot: outputId
+        }
+        this.nodeDef.output.push(output)
+        this.nodeDef.output_is_list?.push(
+          def.output_is_list?.[outputId] ?? false
+        )
+      }
+
+      let label: string | undefined = customConfig?.name
       if (!label) {
-        label = def.output_name?.[outputId] ?? def.output[outputId]
-        // @ts-expect-error fixme ts strict error
-        const output = node.outputs.find((o) => o.name === label)
+        const outputVal = defOutput[outputId]
+        label =
+          def.output_name?.[outputId] ??
+          (typeof outputVal === 'string' ? outputVal : undefined)
+        const output = node.outputs?.find((o) => o.name === label)
         if (output?.label) {
           label = output.label
         }
       }
 
-      let name = label
+      let name = label ?? `output_${outputId}`
       if (name in seenOutputs) {
         const prefix = `${node.title ?? node.type} `
-        name = `${prefix}${label}`
+        name = `${prefix}${label ?? outputId}`
         if (name in seenOutputs) {
-          name = `${prefix}${node.index} ${label}`
+          name = `${prefix}${node.index} ${label ?? outputId}`
         }
       }
       seenOutputs[name] = 1
 
-      // @ts-expect-error fixme ts strict error
-      this.nodeDef.output_name.push(name)
+      this.nodeDef?.output_name?.push(name)
     }
   }
 
-  // @ts-expect-error fixme ts strict error
-  static async registerFromWorkflow(groupNodes, missingNodeTypes) {
+  static async registerFromWorkflow(
+    groupNodes: Record<string, GroupNodeWorkflowData>,
+    missingNodeTypes: (
+      | string
+      | {
+          type: string
+          nodeId?: string | number
+          hint?: string
+          action?: unknown
+        }
+    )[],
+    instanceIdsByGroup?: Map<string, (string | number)[]>
+  ) {
     for (const g in groupNodes) {
       const groupData = groupNodes[g]
 
-      let hasMissing = false
-      for (const n of groupData.nodes) {
-        // Find missing node types
-        if (!(n.type in LiteGraph.registered_node_types)) {
-          missingNodeTypes.push({
-            type: n.type,
-            hint: ` (In group node '${PREFIX}${SEPARATOR}${g}')`
-          })
+      const missingInnerTypes = [
+        ...new Set(
+          groupData.nodes
+            .filter(
+              (n) => !n.type || !(n.type in LiteGraph.registered_node_types)
+            )
+            .map((n) => n.type ?? 'unknown')
+        )
+      ]
 
-          missingNodeTypes.push({
-            type: `${PREFIX}${SEPARATOR}` + g,
-            action: {
-              text: 'Remove from workflow',
-              // @ts-expect-error fixme ts strict error
-              callback: (e) => {
-                delete groupNodes[g]
-                e.target.textContent = 'Removed'
-                e.target.style.pointerEvents = 'none'
-                e.target.style.opacity = 0.7
-              }
-            }
-          })
-
-          hasMissing = true
+      if (missingInnerTypes.length) {
+        const groupType = `${PREFIX}${SEPARATOR}${g}`
+        const registeredGroupType = LiteGraph.registered_node_types[
+          groupType
+        ] as LGraphNodeConstructor | undefined
+        if (registeredGroupType?.nodeData?.[GROUP]) {
+          LiteGraph.unregisterNodeType(groupType)
+          useNodeDefStore().removeNodeDef(groupType)
         }
+        const removeAction = {
+          text: 'Remove from workflow',
+          callback: (e?: MouseEvent) => {
+            delete groupNodes[g]
+            const target = e?.target as HTMLElement | undefined
+            if (!target) return
+            target.textContent = 'Removed'
+            target.style.pointerEvents = 'none'
+            target.style.opacity = '0.7'
+          }
+        }
+        if (instanceIdsByGroup) {
+          // One report per canvas instance so every entry is backed by a
+          // real node and can be retired when that node goes away. A group
+          // definition with no instances gets no report: there is no node
+          // to locate, and nothing that could ever retire the row.
+          for (const id of instanceIdsByGroup.get(g) ?? []) {
+            missingNodeTypes.push({
+              type: groupType,
+              nodeId: String(id),
+              hint: t('g.missingNodeTypesInGroup', {
+                types: missingInnerTypes.join(', ')
+              }),
+              action: removeAction
+            })
+          }
+        } else {
+          for (const missingType of missingInnerTypes) {
+            missingNodeTypes.push({
+              type: missingType,
+              hint: ` (In group node '${groupType}')`
+            })
+          }
+          missingNodeTypes.push({ type: groupType, action: removeAction })
+        }
+        continue
       }
-
-      if (hasMissing) continue
 
       const config = new GroupNodeConfig(g, groupData)
       await config.registerType()
@@ -798,890 +838,226 @@ export class GroupNodeConfig {
   }
 }
 
+/**
+ * Finds the outer widget matching `name`, skipping any index already in
+ * `consumed`.
+ *
+ * Widget names inside a synthesized group-node type are meant to be unique
+ * (see {@link GroupNodeConfig.getInputConfig}'s de-duplication), so pairing
+ * by name alone is normally safe. But it is not *guaranteed* unique across
+ * every inner node/widget combination, and a plain `Array.findIndex` always
+ * resolves a shared name to the *first* matching widget — silently copying
+ * that node's value into every other inner node exposing a widget with the
+ * same final name. Consuming each match exactly once, in the same
+ * node-by-node order the inner nodes are unpacked, keeps every widget paired
+ * with the widget belonging to its own originating node even when two
+ * inner nodes end up sharing an outer widget name (e.g. two `CLIPTextEncode`
+ * nodes both exposing `text`).
+ */
+export function findUnconsumedWidgetIndex(
+  widgets: { name?: string }[] | undefined,
+  name: string,
+  consumed: Set<number>
+): number {
+  if (!widgets) return -1
+  for (let i = 0; i < widgets.length; i++) {
+    if (consumed.has(i)) continue
+    if (widgets[i]?.name === name) return i
+  }
+  return -1
+}
+
+/**
+ * Migration-only adapter for deprecated group nodes.
+ *
+ * Group nodes are no longer a supported feature. When a legacy workflow that
+ * contains group nodes is loaded, {@link GroupNodeConfig.registerFromWorkflow}
+ * synthesizes temporary node types so the instances can be created during
+ * `configure`. The load-time migration unpacks each instance via
+ * {@link convertToNodes} and {@link LGraph.convertToSubgraph} repackages the
+ * result as a subgraph.
+ *
+ */
 export class GroupNodeHandler {
   node: LGraphNode
-  groupData: any
-  innerNodes: any
+  groupData: GroupNodeConfig
 
-  constructor(node: LGraphNode) {
+  constructor(node: LGraphNode, groupData: GroupNodeConfig) {
     this.node = node
-    this.groupData = node.constructor?.nodeData?.[GROUP]
+    this.groupData = groupData
+  }
 
-    this.node.setInnerNodes = (innerNodes) => {
-      this.innerNodes = innerNodes
+  /**
+   * Unpacks this group node into its constituent nodes within the root graph,
+   * copying current widget values and reconnecting external links, then removes
+   * the group node. Returns the newly created nodes.
+   *
+   * Lossiness is accepted: group nodes nested inside subgraphs are unpacked into
+   * the root graph rather than their original container.
+   */
+  convertToNodes(): LGraphNode[] {
+    const node = this.node
+    const { nodeData, oldToNewWidgetMap, oldToNewInputMap, newToOldOutputMap } =
+      this.groupData
 
-      for (
-        let innerNodeIndex = 0;
-        innerNodeIndex < this.innerNodes.length;
-        innerNodeIndex++
-      ) {
-        const innerNode = this.innerNodes[innerNodeIndex]
-        innerNode.graph ??= this.node.graph
+    const addInnerNodes = () => {
+      // Clone the node data so we don't mutate it for other instances
+      const c = { ...nodeData }
+      c.nodes = c.nodes.map((n) => ({ ...n, id: undefined }))
+      deserialiseAndCreate(JSON.stringify(c), app.canvas)
 
-        for (const w of innerNode.widgets ?? []) {
-          if (w.type === 'converted-widget') {
-            w.serializeValue = w.origSerializeValue
-          }
-        }
+      const [x, y] = node.pos
+      let top: number | undefined
+      let left: number | undefined
+      // deserialiseAndCreate selects the created nodes in creation order, which
+      // matches nodeData.nodes order.
+      const selectedIds = selectedCanvasNodes(app.canvas).map((n) => n.id)
+      const newNodes: LGraphNode[] = []
+      // Shared across every inner node processed below, in nodeData.nodes
+      // order, so a widget already paired to one inner node's value can
+      // never be matched again for another (see findUnconsumedWidgetIndex).
+      const consumedOuterWidgetIndices = new Set<number>()
+      for (let i = 0; i < selectedIds.length; i++) {
+        const selectedId = parseNodeId(selectedIds[i])
+        const newNode = selectedId
+          ? app.rootGraph.getNodeById(selectedId)
+          : null
+        const innerNodeData = nodeData.nodes.at(i)
+        if (!newNode) continue
+        newNodes.push(newNode)
 
-        innerNode.index = innerNodeIndex
-        // @ts-expect-error fixme ts strict error
-        innerNode.getInputNode = (slot) => {
-          // Check if this input is internal or external
-          const externalSlot =
-            this.groupData.oldToNewInputMap[innerNode.index]?.[slot]
-          if (externalSlot != null) {
-            return this.node.getInputNode(externalSlot)
-          }
+        if (left == null || newNode.pos[0] < left) left = newNode.pos[0]
+        if (top == null || newNode.pos[1] < top) top = newNode.pos[1]
 
-          // Internal link
-          const innerLink = this.groupData.linksTo[innerNode.index]?.[slot]
-          if (!innerLink) return null
+        if (!newNode.widgets || !innerNodeData) continue
 
-          const inputNode = innerNodes[innerLink[0]]
-          // Primitives will already apply their values
-          if (inputNode.type === 'PrimitiveNode') return null
+        const map = oldToNewWidgetMap[i]
+        if (!map) continue
+        for (const oldName of Object.keys(map)) {
+          const newName = map[oldName]
+          if (!newName) continue
 
-          return inputNode
-        }
+          const widgetIndex = findUnconsumedWidgetIndex(
+            node.widgets,
+            newName,
+            consumedOuterWidgetIndices
+          )
+          if (widgetIndex === -1) continue
 
-        // @ts-expect-error fixme ts strict error
-        innerNode.getInputLink = (slot) => {
-          const externalSlot =
-            this.groupData.oldToNewInputMap[innerNode.index]?.[slot]
-          if (externalSlot != null) {
-            // The inner node is connected via the group node inputs
-            const linkId = this.node.inputs[externalSlot].link
-            // @ts-expect-error fixme ts strict error
-            let link = app.graph.links[linkId]
-
-            // Use the outer link, but update the target to the inner node
-            link = {
-              ...link,
-              target_id: innerNode.id,
-              target_slot: +slot
+          // An index is only marked consumed once its value is actually
+          // copied, so a bail below (a missing inner widget, or fewer outer
+          // widgets than this PrimitiveNode has) can't permanently burn an
+          // index another inner node legitimately needs.
+          if (innerNodeData.type === 'PrimitiveNode') {
+            for (let j = 0; j < newNode.widgets.length; j++) {
+              const srcWidget = node.widgets?.[widgetIndex + j]
+              if (!srcWidget) continue
+              consumedOuterWidgetIndices.add(widgetIndex + j)
+              newNode.widgets[j].value = srcWidget.value
             }
-            return link
-          }
-
-          let link = this.groupData.linksTo[innerNode.index]?.[slot]
-          if (!link) return null
-          // Use the inner link, but update the origin node to be inner node id
-          link = {
-            origin_id: innerNodes[link[0]].id,
-            origin_slot: link[1],
-            target_id: innerNode.id,
-            target_slot: +slot
-          }
-          return link
-        }
-      }
-    }
-
-    this.node.updateLink = (link) => {
-      // Replace the group node reference with the internal node
-      // @ts-expect-error Can this be removed?  Or replaced with: LLink.create(link.asSerialisable())
-      link = { ...link }
-      const output = this.groupData.newToOldOutputMap[link.origin_slot]
-      let innerNode = this.innerNodes[output.node.index]
-      let l
-      while (innerNode?.type === 'Reroute') {
-        l = innerNode.getInputLink(0)
-        innerNode = innerNode.getInputNode(0)
-      }
-
-      if (!innerNode) {
-        return null
-      }
-
-      if (l && GroupNodeHandler.isGroupNode(innerNode)) {
-        return innerNode.updateLink(l)
-      }
-
-      link.origin_id = innerNode.id
-      link.origin_slot = l?.origin_slot ?? output.slot
-      return link
-    }
-
-    /** @internal Used to flatten the subgraph before execution. Recursive; call with no args. */
-    this.node.getInnerNodes = (
-      computedNodeDtos: Map<ExecutionId, ExecutableLGraphNode>,
-      /** The path of subgraph node IDs. */
-      subgraphNodePath: readonly NodeId[] = [],
-      /** The list of nodes to add to. */
-      nodes: ExecutableLGraphNode[] = [],
-      /** The set of visited nodes. */
-      visited = new Set<LGraphNode>()
-    ): ExecutableLGraphNode[] => {
-      if (visited.has(this.node))
-        throw new Error('RecursionError: while flattening subgraph')
-      visited.add(this.node)
-
-      if (!this.innerNodes) {
-        // @ts-expect-error fixme ts strict error
-        this.node.setInnerNodes(
-          // @ts-expect-error fixme ts strict error
-          this.groupData.nodeData.nodes.map((n, i) => {
-            const innerNode = LiteGraph.createNode(n.type)
-            // @ts-expect-error fixme ts strict error
-            innerNode.configure(n)
-            // @ts-expect-error fixme ts strict error
-            innerNode.id = `${this.node.id}:${i}`
-            // @ts-expect-error fixme ts strict error
-            innerNode.graph = this.node.graph
-            return innerNode
-          })
-        )
-      }
-
-      this.updateInnerWidgets()
-
-      const subgraphInstanceIdPath = [...subgraphNodePath, this.node.id]
-
-      // Assertion: Deprecated, does not matter.
-      const subgraphNode = (this.node.graph?.getNodeById(
-        subgraphNodePath.at(-1)
-      ) ?? undefined) as SubgraphNode | undefined
-
-      for (const node of this.innerNodes) {
-        node.graph ??= this.node.graph
-
-        // Create minimal DTOs rather than cloning the node
-        const currentId = String(node.id)
-        node.id = currentId.split(':').at(-1)
-        const aVeryRealNode = new ExecutableGroupNodeChildDTO(
-          node,
-          subgraphInstanceIdPath,
-          computedNodeDtos,
-          subgraphNode
-        )
-        node.id = currentId
-        aVeryRealNode.groupNodeHandler = this
-
-        nodes.push(aVeryRealNode)
-      }
-      return nodes
-    }
-
-    // @ts-expect-error fixme ts strict error
-    this.node.recreate = async () => {
-      const id = this.node.id
-      const sz = this.node.size
-      // @ts-expect-error fixme ts strict error
-      const nodes = this.node.convertToNodes()
-
-      const groupNode = LiteGraph.createNode(this.node.type)
-      // @ts-expect-error fixme ts strict error
-      groupNode.id = id
-
-      // Reuse the existing nodes for this instance
-      // @ts-expect-error fixme ts strict error
-      groupNode.setInnerNodes(nodes)
-      // @ts-expect-error fixme ts strict error
-      groupNode[GROUP].populateWidgets()
-      // @ts-expect-error fixme ts strict error
-      app.graph.add(groupNode)
-      // @ts-expect-error fixme ts strict error
-      groupNode.setSize([
-        // @ts-expect-error fixme ts strict error
-        Math.max(groupNode.size[0], sz[0]),
-        // @ts-expect-error fixme ts strict error
-        Math.max(groupNode.size[1], sz[1])
-      ])
-
-      // Remove all converted nodes and relink them
-      const builder = new GroupNodeBuilder(nodes)
-      const nodeData = builder.getNodeData()
-      // @ts-expect-error fixme ts strict error
-      groupNode[GROUP].groupData.nodeData.links = nodeData.links
-      // @ts-expect-error fixme ts strict error
-      groupNode[GROUP].replaceNodes(nodes)
-      return groupNode
-    }
-
-    // @ts-expect-error fixme ts strict error
-    this.node.convertToNodes = () => {
-      const addInnerNodes = () => {
-        // Clone the node data so we dont mutate it for other nodes
-        const c = { ...this.groupData.nodeData }
-        c.nodes = [...c.nodes]
-        // @ts-expect-error fixme ts strict error
-        const innerNodes = this.node.getInnerNodes()
-        let ids = []
-        for (let i = 0; i < c.nodes.length; i++) {
-          let id = innerNodes?.[i]?.id
-          // Use existing IDs if they are set on the inner nodes
-          // @ts-expect-error id can be string or number
-          if (id == null || isNaN(id)) {
-            // @ts-expect-error fixme ts strict error
-            id = undefined
           } else {
-            ids.push(id)
-          }
-          c.nodes[i] = { ...c.nodes[i], id }
-        }
-        deserialiseAndCreate(JSON.stringify(c), app.canvas)
+            const outerWidget = node.widgets?.[widgetIndex]
+            const newWidget = newNode.widgets.find((w) => w.name === oldName)
+            if (!newWidget || !outerWidget) continue
 
-        const [x, y] = this.node.pos
-        let top
-        let left
-        // Configure nodes with current widget data
-        const selectedIds = ids.length
-          ? ids
-          : Object.keys(app.canvas.selected_nodes)
-        const newNodes = []
-        for (let i = 0; i < selectedIds.length; i++) {
-          const id = selectedIds[i]
-          const newNode = app.graph.getNodeById(id)
-          const innerNode = innerNodes[i]
-          newNodes.push(newNode)
-
-          // @ts-expect-error fixme ts strict error
-          if (left == null || newNode.pos[0] < left) {
-            // @ts-expect-error fixme ts strict error
-            left = newNode.pos[0]
-          }
-          // @ts-expect-error fixme ts strict error
-          if (top == null || newNode.pos[1] < top) {
-            // @ts-expect-error fixme ts strict error
-            top = newNode.pos[1]
-          }
-
-          // @ts-expect-error fixme ts strict error
-          if (!newNode.widgets) continue
-
-          // @ts-expect-error fixme ts strict error
-          const map = this.groupData.oldToNewWidgetMap[innerNode.index]
-          if (map) {
-            const widgets = Object.keys(map)
-
-            for (const oldName of widgets) {
-              const newName = map[oldName]
-              if (!newName) continue
-
-              // @ts-expect-error fixme ts strict error
-              const widgetIndex = this.node.widgets.findIndex(
-                (w) => w.name === newName
-              )
-              if (widgetIndex === -1) continue
-
-              // Populate the main and any linked widgets
-              if (innerNode.type === 'PrimitiveNode') {
-                // @ts-expect-error fixme ts strict error
-                for (let i = 0; i < newNode.widgets.length; i++) {
-                  // @ts-expect-error fixme ts strict error
-                  newNode.widgets[i].value =
-                    // @ts-expect-error fixme ts strict error
-                    this.node.widgets[widgetIndex + i].value
-                }
-              } else {
-                // @ts-expect-error fixme ts strict error
-                const outerWidget = this.node.widgets[widgetIndex]
-                // @ts-expect-error fixme ts strict error
-                const newWidget = newNode.widgets.find(
-                  (w) => w.name === oldName
-                )
-                if (!newWidget) continue
-
-                newWidget.value = outerWidget.value
-                // @ts-expect-error fixme ts strict error
-                for (let w = 0; w < outerWidget.linkedWidgets?.length; w++) {
-                  // @ts-expect-error fixme ts strict error
-                  newWidget.linkedWidgets[w].value =
-                    // @ts-expect-error fixme ts strict error
-                    outerWidget.linkedWidgets[w].value
-                }
-              }
-            }
-          }
-        }
-
-        // Shift each node
-        for (const newNode of newNodes) {
-          // @ts-expect-error fixme ts strict error
-          newNode.pos[0] -= left - x
-          // @ts-expect-error fixme ts strict error
-          newNode.pos[1] -= top - y
-        }
-
-        return { newNodes, selectedIds }
-      }
-
-      // @ts-expect-error fixme ts strict error
-      const reconnectInputs = (selectedIds) => {
-        for (const innerNodeIndex in this.groupData.oldToNewInputMap) {
-          const id = selectedIds[innerNodeIndex]
-          const newNode = app.graph.getNodeById(id)
-          const map = this.groupData.oldToNewInputMap[innerNodeIndex]
-          for (const innerInputId in map) {
-            const groupSlotId = map[innerInputId]
-            if (groupSlotId == null) continue
-            const slot = node.inputs[groupSlotId]
-            if (slot.link == null) continue
-            const link = app.graph.links[slot.link]
-            if (!link) continue
-            //  connect this node output to the input of another node
-            const originNode = app.graph.getNodeById(link.origin_id)
-            // @ts-expect-error fixme ts strict error
-            originNode.connect(link.origin_slot, newNode, +innerInputId)
-          }
-        }
-      }
-
-      // @ts-expect-error fixme ts strict error
-      const reconnectOutputs = (selectedIds) => {
-        for (
-          let groupOutputId = 0;
-          groupOutputId < node.outputs?.length;
-          groupOutputId++
-        ) {
-          const output = node.outputs[groupOutputId]
-          if (!output.links) continue
-          const links = [...output.links]
-          for (const l of links) {
-            const slot = this.groupData.newToOldOutputMap[groupOutputId]
-            const link = app.graph.links[l]
-            const targetNode = app.graph.getNodeById(link.target_id)
-            const newNode = app.graph.getNodeById(selectedIds[slot.node.index])
-            // @ts-expect-error fixme ts strict error
-            newNode.connect(slot.slot, targetNode, link.target_slot)
-          }
-        }
-      }
-
-      app.canvas.emitBeforeChange()
-
-      try {
-        const { newNodes, selectedIds } = addInnerNodes()
-        reconnectInputs(selectedIds)
-        reconnectOutputs(selectedIds)
-        app.graph.remove(this.node)
-
-        return newNodes
-      } finally {
-        app.canvas.emitAfterChange()
-      }
-    }
-
-    const getExtraMenuOptions = this.node.getExtraMenuOptions
-    // @ts-expect-error Should pass patched return value getExtraMenuOptions
-    this.node.getExtraMenuOptions = function (_, options) {
-      // @ts-expect-error fixme ts strict error
-      getExtraMenuOptions?.apply(this, arguments)
-
-      let optionIndex = options.findIndex((o) => o?.content === 'Outputs')
-      if (optionIndex === -1) optionIndex = options.length
-      else optionIndex++
-      options.splice(
-        optionIndex,
-        0,
-        null,
-        {
-          content: 'Convert to nodes',
-          // @ts-expect-error
-          callback: () => {
-            // @ts-expect-error fixme ts strict error
-            return this.convertToNodes()
-          }
-        },
-        {
-          content: 'Manage Group Node',
-          callback: () => manageGroupNodes(this.type)
-        }
-      )
-    }
-
-    // Draw custom collapse icon to identity this as a group
-    const onDrawTitleBox = this.node.onDrawTitleBox
-    this.node.onDrawTitleBox = function (ctx, height) {
-      // @ts-expect-error fixme ts strict error
-      onDrawTitleBox?.apply(this, arguments)
-
-      const fill = ctx.fillStyle
-      ctx.beginPath()
-      ctx.rect(11, -height + 11, 2, 2)
-      ctx.rect(14, -height + 11, 2, 2)
-      ctx.rect(17, -height + 11, 2, 2)
-      ctx.rect(11, -height + 14, 2, 2)
-      ctx.rect(14, -height + 14, 2, 2)
-      ctx.rect(17, -height + 14, 2, 2)
-      ctx.rect(11, -height + 17, 2, 2)
-      ctx.rect(14, -height + 17, 2, 2)
-      ctx.rect(17, -height + 17, 2, 2)
-
-      ctx.fillStyle = this.boxcolor || LiteGraph.NODE_DEFAULT_BOXCOLOR
-      ctx.fill()
-      ctx.fillStyle = fill
-    }
-
-    // Draw progress label
-    const onDrawForeground = node.onDrawForeground
-    const groupData = this.groupData.nodeData
-    node.onDrawForeground = function (ctx) {
-      // @ts-expect-error fixme ts strict error
-      onDrawForeground?.apply?.(this, arguments)
-      const progressState = useExecutionStore().nodeProgressStates[this.id]
-      if (
-        progressState &&
-        progressState.state === 'running' &&
-        this.runningInternalNodeId !== null
-      ) {
-        // @ts-expect-error fixme ts strict error
-        const n = groupData.nodes[this.runningInternalNodeId]
-        if (!n) return
-        const message = `Running ${n.title || n.type} (${this.runningInternalNodeId}/${groupData.nodes.length})`
-        ctx.save()
-        ctx.font = '12px sans-serif'
-        const sz = ctx.measureText(message)
-        ctx.fillStyle = node.boxcolor || LiteGraph.NODE_DEFAULT_BOXCOLOR
-        ctx.beginPath()
-        ctx.roundRect(
-          0,
-          -LiteGraph.NODE_TITLE_HEIGHT - 20,
-          sz.width + 12,
-          20,
-          5
-        )
-        ctx.fill()
-
-        ctx.fillStyle = '#fff'
-        ctx.fillText(message, 6, -LiteGraph.NODE_TITLE_HEIGHT - 6)
-        ctx.restore()
-      }
-    }
-
-    // Flag this node as needing to be reset
-    const onExecutionStart = this.node.onExecutionStart
-    this.node.onExecutionStart = function () {
-      // @ts-expect-error fixme ts strict error
-      this.resetExecution = true
-      // @ts-expect-error fixme ts strict error
-      return onExecutionStart?.apply(this, arguments)
-    }
-
-    const self = this
-    const onNodeCreated = this.node.onNodeCreated
-    this.node.onNodeCreated = function () {
-      if (!this.widgets) {
-        return
-      }
-      const config = self.groupData.nodeData.config
-      if (config) {
-        for (const n in config) {
-          const inputs = config[n]?.input
-          for (const w in inputs) {
-            if (inputs[w].visible !== false) continue
-            const widgetName = self.groupData.oldToNewWidgetMap[n][w]
-            const widget = this.widgets.find((w) => w.name === widgetName)
-            if (widget) {
-              widget.type = 'hidden'
-              widget.computeSize = () => [0, -4]
-            }
-          }
-        }
-      }
-
-      // @ts-expect-error fixme ts strict error
-      return onNodeCreated?.apply(this, arguments)
-    }
-
-    // @ts-expect-error fixme ts strict error
-    function handleEvent(type, getId, getEvent) {
-      // @ts-expect-error fixme ts strict error
-      const handler = ({ detail }) => {
-        const id = getId(detail)
-        if (!id) return
-        const node = app.graph.getNodeById(id)
-        if (node) return
-
-        // @ts-expect-error fixme ts strict error
-        const innerNodeIndex = this.innerNodes?.findIndex((n) => n.id == id)
-        if (innerNodeIndex > -1) {
-          // @ts-expect-error fixme ts strict error
-          this.node.runningInternalNodeId = innerNodeIndex
-          api.dispatchCustomEvent(
-            type,
-            // @ts-expect-error fixme ts strict error
-            getEvent(detail, `${this.node.id}`, this.node)
-          )
-        }
-      }
-      api.addEventListener(type, handler)
-      return handler
-    }
-
-    const executing = handleEvent.call(
-      this,
-      'executing',
-      // @ts-expect-error fixme ts strict error
-      (d) => d,
-      // @ts-expect-error fixme ts strict error
-      (_, id) => id
-    )
-
-    const executed = handleEvent.call(
-      this,
-      'executed',
-      // @ts-expect-error fixme ts strict error
-      (d) => d?.display_node || d?.node,
-      // @ts-expect-error fixme ts strict error
-      (d, id, node) => ({
-        ...d,
-        node: id,
-        display_node: id,
-        merge: !node.resetExecution
-      })
-    )
-
-    const onRemoved = node.onRemoved
-    this.node.onRemoved = function () {
-      // @ts-expect-error fixme ts strict error
-      onRemoved?.apply(this, arguments)
-      // api.removeEventListener('progress_state', progress_state)
-      api.removeEventListener('executing', executing)
-      api.removeEventListener('executed', executed)
-    }
-
-    this.node.refreshComboInNode = (defs) => {
-      // Update combo widget options
-      for (const widgetName in this.groupData.newToOldWidgetMap) {
-        // @ts-expect-error fixme ts strict error
-        const widget = this.node.widgets.find((w) => w.name === widgetName)
-        if (widget?.type === 'combo') {
-          const old = this.groupData.newToOldWidgetMap[widgetName]
-          const def = defs[old.node.type]
-          const input =
-            def?.input?.required?.[old.inputName] ??
-            def?.input?.optional?.[old.inputName]
-          if (!input) continue
-
-          widget.options.values = input[0]
-
-          if (
-            old.inputName !== 'image' &&
-            // @ts-expect-error Widget values
-            !widget.options.values.includes(widget.value)
-          ) {
-            // @ts-expect-error fixme ts strict error
-            widget.value = widget.options.values[0]
-            // @ts-expect-error fixme ts strict error
-            widget.callback(widget.value)
-          }
-        }
-      }
-    }
-  }
-
-  updateInnerWidgets() {
-    for (const newWidgetName in this.groupData.newToOldWidgetMap) {
-      // @ts-expect-error fixme ts strict error
-      const newWidget = this.node.widgets.find((w) => w.name === newWidgetName)
-      if (!newWidget) continue
-
-      const newValue = newWidget.value
-      const old = this.groupData.newToOldWidgetMap[newWidgetName]
-      let innerNode = this.innerNodes[old.node.index]
-
-      if (innerNode.type === 'PrimitiveNode') {
-        innerNode.primitiveValue = newValue
-        const primitiveLinked = this.groupData.primitiveToWidget[old.node.index]
-        for (const linked of primitiveLinked ?? []) {
-          const node = this.innerNodes[linked.nodeId]
-          // @ts-expect-error fixme ts strict error
-          const widget = node.widgets.find((w) => w.name === linked.inputName)
-
-          if (widget) {
-            widget.value = newValue
-          }
-        }
-        continue
-      } else if (innerNode.type === 'Reroute') {
-        const rerouteLinks = this.groupData.linksFrom[old.node.index]
-        if (rerouteLinks) {
-          for (const [_, , targetNodeId, targetSlot] of rerouteLinks['0']) {
-            const node = this.innerNodes[targetNodeId]
-            const input = node.inputs[targetSlot]
-            if (input.widget) {
-              const widget = node.widgets?.find(
-                // @ts-expect-error fixme ts strict error
-                (w) => w.name === input.widget.name
-              )
-              if (widget) {
-                widget.value = newValue
+            consumedOuterWidgetIndices.add(widgetIndex)
+            newWidget.value = outerWidget.value
+            const linkedWidgets = outerWidget.linkedWidgets ?? []
+            for (let w = 0; w < linkedWidgets.length; w++) {
+              const newLinked = newWidget.linkedWidgets?.[w]
+              if (newLinked && linkedWidgets[w]) {
+                newLinked.value = linkedWidgets[w].value
               }
             }
           }
         }
       }
 
-      // @ts-expect-error fixme ts strict error
-      const widget = innerNode.widgets?.find((w) => w.name === old.inputName)
-      if (widget) {
-        widget.value = newValue
+      // Shift each node so the unpacked group appears at the group node position
+      for (const newNode of newNodes) {
+        newNode.pos = [
+          newNode.pos[0] - ((left ?? 0) - x),
+          newNode.pos[1] - ((top ?? 0) - y)
+        ]
+      }
+
+      return { newNodes, selectedIds }
+    }
+
+    const reconnectInputs = (selectedIds: (string | number)[]) => {
+      for (const [innerNodeIndex, map] of Object.entries(oldToNewInputMap)) {
+        const selectedId = parseNodeId(selectedIds[Number(innerNodeIndex)])
+        const newNode = selectedId
+          ? app.rootGraph.getNodeById(selectedId)
+          : null
+        if (!newNode || !map) continue
+        for (const [innerInputName, groupSlotId] of Object.entries(map)) {
+          const link = node.getInputLink(groupSlotId)
+          if (!link) continue
+          const originNode = app.rootGraph.getNodeById(link.origin_id)
+          const innerInputId = newNode.findInputSlot(innerInputName)
+          if (innerInputId !== -1) {
+            originNode?.connect(link.origin_slot, newNode, innerInputId)
+          }
+        }
       }
     }
-  }
 
-  // @ts-expect-error fixme ts strict error
-  populatePrimitive(_node, nodeId, oldName) {
-    // Converted widget, populate primitive if linked
-    const primitiveId = this.groupData.widgetToPrimitive[nodeId]?.[oldName]
-    if (primitiveId == null) return
-    const targetWidgetName =
-      this.groupData.oldToNewWidgetMap[primitiveId]['value']
-    // @ts-expect-error fixme ts strict error
-    const targetWidgetIndex = this.node.widgets.findIndex(
-      (w) => w.name === targetWidgetName
-    )
-    if (targetWidgetIndex > -1) {
-      const primitiveNode = this.innerNodes[primitiveId]
-      let len = primitiveNode.widgets.length
-      if (
-        len - 1 !==
-        // @ts-expect-error fixme ts strict error
-        this.node.widgets[targetWidgetIndex].linkedWidgets?.length
+    const reconnectOutputs = (selectedIds: (string | number)[]) => {
+      for (
+        let groupOutputId = 0;
+        groupOutputId < node.outputs.length;
+        groupOutputId++
       ) {
-        // Fallback handling for if some reason the primitive has a different number of widgets
-        // we dont want to overwrite random widgets, better to leave blank
-        len = 1
-      }
-      for (let i = 0; i < len; i++) {
-        // @ts-expect-error fixme ts strict error
-        this.node.widgets[targetWidgetIndex + i].value =
-          primitiveNode.widgets[i].value
-      }
-    }
-    return true
-  }
-
-  // @ts-expect-error fixme ts strict error
-  populateReroute(node, nodeId, map) {
-    if (node.type !== 'Reroute') return
-
-    const link = this.groupData.linksFrom[nodeId]?.[0]?.[0]
-    if (!link) return
-    const [, , targetNodeId, targetNodeSlot] = link
-    const targetNode = this.groupData.nodeData.nodes[targetNodeId]
-    const inputs = targetNode.inputs
-    const targetWidget = inputs?.[targetNodeSlot]?.widget
-    if (!targetWidget) return
-
-    const offset = inputs.length - (targetNode.widgets_values?.length ?? 0)
-    const v = targetNode.widgets_values?.[targetNodeSlot - offset]
-    if (v == null) return
-
-    const widgetName = Object.values(map)[0]
-    // @ts-expect-error fixme ts strict error
-    const widget = this.node.widgets.find((w) => w.name === widgetName)
-    if (widget) {
-      widget.value = v
-    }
-  }
-
-  populateWidgets() {
-    if (!this.node.widgets) return
-
-    for (
-      let nodeId = 0;
-      nodeId < this.groupData.nodeData.nodes.length;
-      nodeId++
-    ) {
-      const node = this.groupData.nodeData.nodes[nodeId]
-      const map = this.groupData.oldToNewWidgetMap[nodeId] ?? {}
-      const widgets = Object.keys(map)
-
-      if (!node.widgets_values?.length) {
-        // special handling for populating values into reroutes
-        // this allows primitives connect to them to pick up the correct value
-        this.populateReroute(node, nodeId, map)
-        continue
-      }
-
-      let linkedShift = 0
-      for (let i = 0; i < widgets.length; i++) {
-        const oldName = widgets[i]
-        const newName = map[oldName]
-        const widgetIndex = this.node.widgets.findIndex(
-          (w) => w.name === newName
-        )
-        const mainWidget = this.node.widgets[widgetIndex]
-        if (
-          this.populatePrimitive(node, nodeId, oldName) ||
-          widgetIndex === -1
-        ) {
-          // Find the inner widget and shift by the number of linked widgets as they will have been removed too
-          const innerWidget = this.innerNodes[nodeId].widgets?.find(
-            // @ts-expect-error fixme ts strict error
-            (w) => w.name === oldName
-          )
-          linkedShift += innerWidget?.linkedWidgets?.length ?? 0
-        }
-        if (widgetIndex === -1) {
-          continue
-        }
-
-        // Populate the main and any linked widget
-        mainWidget.value = node.widgets_values[i + linkedShift]
-        // @ts-expect-error fixme ts strict error
-        for (let w = 0; w < mainWidget.linkedWidgets?.length; w++) {
-          this.node.widgets[widgetIndex + w + 1].value =
-            node.widgets_values[i + ++linkedShift]
+        const links = outputLinks(app.rootGraph, node.id, groupOutputId)
+        for (const link of links) {
+          const slot = newToOldOutputMap[groupOutputId]
+          if (!slot) continue
+          const targetNode = app.rootGraph.getNodeById(link.target_id)
+          const selectedId = parseNodeId(selectedIds[slot.node.index ?? 0])
+          const newNode = selectedId
+            ? app.rootGraph.getNodeById(selectedId)
+            : null
+          if (targetNode) {
+            newNode?.connect(slot.slot, targetNode, link.target_slot)
+          }
         }
       }
     }
-  }
 
-  // @ts-expect-error fixme ts strict error
-  replaceNodes(nodes) {
-    let top
-    let left
-
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i]
-      if (left == null || node.pos[0] < left) {
-        left = node.pos[0]
-      }
-      if (top == null || node.pos[1] < top) {
-        top = node.pos[1]
-      }
-
-      this.linkOutputs(node, i)
-      app.graph.remove(node)
-
-      // Set internal ID to what is expected after workflow is reloaded
-      node.id = `${this.node.id}:${i}`
-    }
-
-    this.linkInputs()
-    this.node.pos = [left, top]
-  }
-
-  // @ts-expect-error fixme ts strict error
-  linkOutputs(originalNode, nodeId) {
-    if (!originalNode.outputs) return
-
-    for (const output of originalNode.outputs) {
-      if (!output.links) continue
-      // Clone the links as they'll be changed if we reconnect
-      const links = [...output.links]
-      for (const l of links) {
-        const link = app.graph.links[l]
-        if (!link) continue
-
-        const targetNode = app.graph.getNodeById(link.target_id)
-        const newSlot =
-          this.groupData.oldToNewOutputMap[nodeId]?.[link.origin_slot]
-        if (newSlot != null) {
-          // @ts-expect-error fixme ts strict error
-          this.node.connect(newSlot, targetNode, link.target_slot)
-        }
-      }
+    app.canvas.emitBeforeChange()
+    try {
+      const { newNodes, selectedIds } = addInnerNodes()
+      reconnectInputs(selectedIds)
+      reconnectOutputs(selectedIds)
+      app.rootGraph.remove(this.node)
+      return newNodes
+    } finally {
+      app.canvas.emitAfterChange()
     }
   }
 
-  linkInputs() {
-    for (const link of this.groupData.nodeData.links ?? []) {
-      const [, originSlot, targetId, targetSlot, actualOriginId] = link
-      const originNode = app.graph.getNodeById(actualOriginId)
-      if (!originNode) continue // this node is in the group
-      originNode.connect(
-        originSlot,
-        // @ts-expect-error Valid - uses deprecated interface.  Required check: if (graph.getNodeById(this.node.id) !== this.node) report()
-        this.node.id,
-        this.groupData.oldToNewInputMap[targetId][targetSlot]
-      )
-    }
-  }
-
-  // @ts-expect-error fixme ts strict error
-  static getGroupData(node) {
-    return (node.nodeData ?? node.constructor?.nodeData)?.[GROUP]
+  static getHandler(node: LGraphNode): GroupNodeHandler | undefined {
+    const cached = (node as LGraphNode & { [GROUP]?: GroupNodeHandler })[GROUP]
+    if (cached) return cached
+    const groupData = groupConfigOf(node)
+    if (!groupData) return undefined
+    const handler = new GroupNodeHandler(node, groupData)
+    ;(node as LGraphNode & { [GROUP]: GroupNodeHandler })[GROUP] = handler
+    return handler
   }
 
   static isGroupNode(node: LGraphNode) {
-    return !!node.constructor?.nodeData?.[GROUP]
-  }
-
-  static async fromNodes(nodes: LGraphNode[]) {
-    // Process the nodes into the stored workflow group node data
-    const builder = new GroupNodeBuilder(nodes)
-    const res = await builder.build()
-    if (!res) return
-
-    const { name, nodeData } = res
-
-    // Convert this data into a LG node definition and register it
-    const config = new GroupNodeConfig(name, nodeData)
-    await config.registerType()
-
-    const groupNode = LiteGraph.createNode(`${PREFIX}${SEPARATOR}${name}`)
-    // Reuse the existing nodes for this instance
-    // @ts-expect-error fixme ts strict error
-    groupNode.setInnerNodes(builder.nodes)
-    // @ts-expect-error fixme ts strict error
-    groupNode[GROUP].populateWidgets()
-    // @ts-expect-error fixme ts strict error
-    app.graph.add(groupNode)
-
-    // Remove all converted nodes and relink them
-    // @ts-expect-error fixme ts strict error
-    groupNode[GROUP].replaceNodes(builder.nodes)
-    return groupNode
+    return groupConfigOf(node) !== undefined
   }
 }
 
-function addConvertToGroupOptions() {
-  // @ts-expect-error fixme ts strict error
-  function addConvertOption(options, index) {
-    const selected = Object.values(app.canvas.selected_nodes ?? {})
-    const disabled =
-      selected.length < 2 ||
-      selected.find((n) => GroupNodeHandler.isGroupNode(n))
-    options.splice(index, null, {
-      content: `Convert to Group Node (Deprecated)`,
-      disabled,
-      callback: convertSelectedNodesToGroupNode
-    })
-  }
-
-  // @ts-expect-error fixme ts strict error
-  function addManageOption(options, index) {
-    const groups = app.graph.extra?.groupNodes
-    const disabled = !groups || !Object.keys(groups).length
-    options.splice(index, null, {
-      content: `Manage Group Nodes`,
-      disabled,
-      callback: () => manageGroupNodes()
-    })
-  }
-
-  // Add to canvas
-  const getCanvasMenuOptions = LGraphCanvas.prototype.getCanvasMenuOptions
-  LGraphCanvas.prototype.getCanvasMenuOptions = function () {
-    // @ts-expect-error fixme ts strict error
-    const options = getCanvasMenuOptions.apply(this, arguments)
-    const index = options.findIndex((o) => o?.content === 'Add Group')
-    const insertAt = index === -1 ? options.length - 1 : index + 2
-    addConvertOption(options, insertAt)
-    addManageOption(options, insertAt + 1)
-    return options
-  }
-
-  // Add to nodes
-  const getNodeMenuOptions = LGraphCanvas.prototype.getNodeMenuOptions
-  LGraphCanvas.prototype.getNodeMenuOptions = function (node) {
-    // @ts-expect-error fixme ts strict error
-    const options = getNodeMenuOptions.apply(this, arguments)
-    if (!GroupNodeHandler.isGroupNode(node)) {
-      const index = options.findIndex((o) => o?.content === 'Properties')
-      const insertAt = index === -1 ? options.length - 1 : index
-      addConvertOption(options, insertAt)
-    }
-    return options
-  }
+function groupConfigOf(node: LGraphNode): GroupNodeConfig | undefined {
+  const config = node.constructor.nodeData?.[GROUP]
+  return config instanceof GroupNodeConfig ? config : undefined
 }
 
-const replaceLegacySeparators = (nodes: ComfyNode[]): void => {
+export const replaceLegacySeparators = (nodes: ComfyNode[]): void => {
   for (const node of nodes) {
     if (typeof node.type === 'string' && node.type.startsWith('workflow/')) {
       node.type = node.type.replace(/^workflow\//, `${PREFIX}${SEPARATOR}`)
@@ -1690,132 +1066,138 @@ const replaceLegacySeparators = (nodes: ComfyNode[]): void => {
 }
 
 /**
- * Convert selected nodes to a group node
- * @throws {Error} if no nodes are selected
- * @throws {Error} if a group node is already selected
- * @throws {Error} if a group node is selected
- *
- * The context menu item should not be available if any of the above conditions are met.
- * The error is automatically handled by the commandStore when the command is executed.
+ * Converts every group node in the root graph to a subgraph. Re-scans until none
+ * remain so group nodes revealed by a previous conversion are also migrated. A
+ * failed conversion removes the offending node so loading can continue (accepted
+ * lossiness) and the scan cannot loop forever.
+ * @returns the number of group nodes converted
  */
-async function convertSelectedNodesToGroupNode() {
-  const nodes = Object.values(app.canvas.selected_nodes ?? {})
-  if (nodes.length === 0) {
-    throw new Error('No nodes selected')
-  }
-  if (nodes.length === 1) {
-    throw new Error('Please select multiple nodes to convert to group node')
-  }
-
-  for (const node of nodes) {
-    if (node instanceof SubgraphNode) {
-      throw new Error('Selected nodes contain a subgraph node')
+function convertLoadedGroupNodes(): number {
+  let converted = 0
+  const failed = new Set<LGraphNode>()
+  for (;;) {
+    const node = app.rootGraph.nodes.find(
+      (n) => GroupNodeHandler.isGroupNode(n) && !failed.has(n)
+    )
+    if (!node) return converted
+    try {
+      const handler = GroupNodeHandler.getHandler(node)
+      if (!handler) {
+        console.error('Missing handler for group node')
+        failed.add(node)
+        app.rootGraph.remove(node)
+        continue
+      }
+      const innerNodes = handler.convertToNodes()
+      for (const inner of innerNodes) inner.updateArea()
+      app.rootGraph.convertToSubgraph(new Set(innerNodes))
+      converted++
+    } catch (error) {
+      console.error('Failed to convert group node to subgraph', error)
+      failed.add(node)
+      try {
+        app.rootGraph.remove(node)
+      } catch (removeError) {
+        console.error(
+          'Failed to remove group node after conversion failure',
+          removeError
+        )
+      }
     }
-    if (GroupNodeHandler.isGroupNode(node)) {
-      throw new Error('Selected nodes contain a group node')
-    }
   }
-  return await GroupNodeHandler.fromNodes(nodes)
 }
 
-function ungroupSelectedGroupNodes() {
-  const nodes = Object.values(app.canvas.selected_nodes ?? {})
-  for (const node of nodes) {
-    if (GroupNodeHandler.isGroupNode(node)) {
-      node.convertToNodes?.()
-    }
-  }
-}
-
-function manageGroupNodes(type?: string) {
-  new ManageGroupDialog(app).show(type)
-}
+const groupNodeReportIndices = new WeakMap<
+  Exclude<MissingNodeType, string>,
+  number
+>()
 
 const id = 'Comfy.GroupNode'
-// @ts-expect-error fixme ts strict error
-let globalDefs
-const ext: ComfyExtension = {
+
+/**
+ * Global node definitions cache. Populated by `addCustomNodeDefs` during
+ * extension initialization and read by {@link GroupNodeConfig.getNodeDef} when
+ * synthesizing temporary group-node definitions during load.
+ */
+let globalDefs: Partial<Record<string, ComfyNodeDef>> = {}
+export const groupNodeExtension: ComfyExtension = {
   name: id,
-  commands: [
-    {
-      id: 'Comfy.GroupNode.ConvertSelectedNodesToGroupNode',
-      label: 'Convert selected nodes to group node',
-      icon: 'pi pi-sitemap',
-      versionAdded: '1.3.17',
-      function: convertSelectedNodesToGroupNode
-    },
-    {
-      id: 'Comfy.GroupNode.UngroupSelectedGroupNodes',
-      label: 'Ungroup selected group nodes',
-      icon: 'pi pi-sitemap',
-      versionAdded: '1.3.17',
-      function: ungroupSelectedGroupNodes
-    },
-    {
-      id: 'Comfy.GroupNode.ManageGroupNodes',
-      label: 'Manage group nodes',
-      icon: 'pi pi-cog',
-      versionAdded: '1.3.17',
-      function: manageGroupNodes
-    }
-  ],
-  keybindings: [
-    {
-      commandId: 'Comfy.GroupNode.ConvertSelectedNodesToGroupNode',
-      combo: {
-        alt: true,
-        key: 'g'
-      }
-    },
-    {
-      commandId: 'Comfy.GroupNode.UngroupSelectedGroupNodes',
-      combo: {
-        alt: true,
-        shift: true,
-        key: 'G'
-      }
-    }
-  ],
-  setup() {
-    addConvertToGroupOptions()
+  addCustomNodeDefs(defs: Record<string, ComfyNodeDef>) {
+    globalDefs = defs
   },
   async beforeConfigureGraph(
     graphData: ComfyWorkflowJSON,
-    missingNodeTypes: string[]
+    missingNodeTypes: MissingNodeType[]
   ) {
-    const nodes = graphData?.extra?.groupNodes
+    const nodes = graphData.extra?.groupNodes as
+      | Record<string, GroupNodeWorkflowData>
+      | undefined
     if (nodes) {
       replaceLegacySeparators(graphData.nodes)
-      await GroupNodeConfig.registerFromWorkflow(nodes, missingNodeTypes)
+      const instanceIndicesByGroup = new Map<string, number[]>()
+      const groupTypePrefix = `${PREFIX}${SEPARATOR}`
+      for (const [nodeIndex, n] of graphData.nodes.entries()) {
+        if (!n.type.startsWith(groupTypePrefix)) continue
+        const groupName = n.type.slice(groupTypePrefix.length)
+        const indices = instanceIndicesByGroup.get(groupName) ?? []
+        indices.push(nodeIndex)
+        instanceIndicesByGroup.set(groupName, indices)
+      }
+      const groupNodeReports: MissingNodeType[] = []
+      await GroupNodeConfig.registerFromWorkflow(
+        nodes,
+        groupNodeReports,
+        instanceIndicesByGroup
+      )
+      for (const report of groupNodeReports) {
+        if (typeof report === 'string' || report.nodeId == null) continue
+        const nodeIndex = Number(report.nodeId)
+        if (Number.isInteger(nodeIndex)) {
+          groupNodeReportIndices.set(report, nodeIndex)
+        }
+      }
+      missingNodeTypes.push(...groupNodeReports)
     }
   },
-  addCustomNodeDefs(defs) {
-    // Store this so we can mutate it later with group nodes
-    globalDefs = defs
-  },
-  nodeCreated(node) {
-    if (GroupNodeHandler.isGroupNode(node)) {
-      // @ts-expect-error fixme ts strict error
-      node[GROUP] = new GroupNodeHandler(node)
-
-      // Ensure group nodes pasted from other workflows are stored
-      // @ts-expect-error fixme ts strict error
-      if (node.title && node[GROUP]?.groupData?.nodeData) {
-        // @ts-expect-error fixme ts strict error
-        Workflow.storeGroupNode(node.title, node[GROUP].groupData.nodeData)
+  afterConfigureGraph(missingNodeTypes) {
+    for (let index = missingNodeTypes.length - 1; index >= 0; index--) {
+      const report = missingNodeTypes[index]
+      if (typeof report === 'string') continue
+      const nodeIndex = groupNodeReportIndices.get(report)
+      if (nodeIndex === undefined) continue
+      groupNodeReportIndices.delete(report)
+      const node = app.rootGraph.nodes.at(nodeIndex)
+      if (node) {
+        report.nodeId = String(node.id)
+      } else {
+        missingNodeTypes.splice(index, 1)
       }
     }
+    if (convertLoadedGroupNodes() > 0) {
+      delete app.rootGraph.extra.groupNodes
+    }
   },
-  // @ts-expect-error fixme ts strict error
-  async refreshComboInNodes(defs) {
-    // Re-register group nodes so new ones are created with the correct options
-    // @ts-expect-error fixme ts strict error
-    Object.assign(globalDefs, defs)
-    const nodes = app.graph.extra?.groupNodes
-    if (nodes) {
-      await GroupNodeConfig.registerFromWorkflow(nodes, {})
+  nodeCreated(node: LGraphNode) {
+    if (!GroupNodeHandler.isGroupNode(node)) return
+    const handler = GroupNodeHandler.getHandler(node)
+    // A stray group node created after load (e.g. paste) has no migration pass;
+    // convert it to a subgraph once it has joined a graph.
+    if (!app.configuringGraph) {
+      queueMicrotask(() => {
+        const graph = node.graph
+        if (graph && handler && GroupNodeHandler.isGroupNode(node)) {
+          try {
+            const innerNodes = handler.convertToNodes()
+            for (const inner of innerNodes) inner.updateArea()
+            graph.convertToSubgraph(new Set(innerNodes))
+          } catch (error) {
+            console.error(
+              'Failed to convert stray group node to subgraph',
+              error
+            )
+          }
+        }
+      })
     }
   }
 }
-
-app.registerExtension(ext)

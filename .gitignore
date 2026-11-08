@@ -10,25 +10,38 @@ lerna-debug.log*
 # Package manager lockfiles (allow users to use different package managers)
 bun.lock
 bun.lockb
-pnpm-lock.yaml
 yarn.lock
 
 # Cache files
 .eslintcache
 .prettiercache
+.stylelintcache
+.fallow/
+*.tsbuildinfo
 
 node_modules
+.pnpm-store
+.nx
 dist
+dist-types
 dist-ssr
 *.local
 # Claude configuration
 .claude/*.local.json
+.claude/*.local.md
+.claude/*.local.txt
+.claude/worktrees
+CLAUDE.local.md
+
+# Glary agent artifacts
+.glary/
 
 # Editor directories and files
 .vscode/*
 *.code-workspace
 !.vscode/extensions.json
 !.vscode/tailwind.json
+!.vscode/custom-css.json
 !.vscode/settings.json.default
 !.vscode/launch.json.default
 .idea
@@ -44,6 +57,8 @@ components.d.ts
 tests-ui/data/*
 tests-ui/ComfyUI_examples
 tests-ui/workflows/examples
+coverage/
+.vitest/
 
 # Browser tests
 /test-results/
@@ -51,12 +66,18 @@ tests-ui/workflows/examples
 /blob-report/
 /playwright/.cache/
 browser_tests/**/*-win32.png
+browser_tests/**/*-darwin.png
+browser_tests/local/
+browser_tests/tests/_recording-session.spec.ts
+browser_tests/tests/_recorded-code.txt
+browser_tests/**/*.raw.spec.ts
 
 .env
 
 dist.zip
 
 /temp/
+/tmp/
 
 # Generated JSON Schemas
 /schemas/
@@ -72,8 +93,32 @@ templates_repo/
 vite.config.mts.timestamp-*.mjs
 
 # Linux core dumps
-./core
+/core
 
 *storybook.log
 storybook-static
 
+# MCP Servers
+.playwright-mcp/*
+
+vite.config.*.timestamp*
+vitest.config.*.timestamp*
+
+# Weekly docs check output
+/output.txt
+
+# Amp local state stays ignored; the tracked orb service config must stay addable
+.amp/*
+!.amp/services.yaml
+# Registry census working tree (scripts/registry-census) - corpus, lockfile, results
+.census/
+# Ecosystem matrix fixture (scripts/registry-census/build_matrix.py) - generated per-pack specs
+src/__ecs_matrix__/
+# Per-pack result rows written by a local detection-proof run
+matrix-proof/
+
+# Agent telemetry working files
+/telemetry/
+
+# Raw recorder sidecars (frames, rows, identifiers); only the sanitized conversation JSON is tracked
+browser_tests/fixtures/data/agent/conversations/recordings/

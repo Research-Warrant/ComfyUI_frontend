@@ -1,97 +1,192 @@
+import type { PlaywrightTestConfig } from '@playwright/test'
 import { defineConfig, devices } from '@playwright/test'
 
-/**
- * Read environment variables from file.
- * https://github.com/motdotla/dotenv
- */
-// import dotenv from 'dotenv';
-// dotenv.config({ path: path.resolve(__dirname, '.env') });
+const distribution = process.env.DISTRIBUTION
+Object.assign(globalThis, {
+  __DISTRIBUTION__:
+    distribution === 'desktop' ||
+    distribution === 'localhost' ||
+    distribution === 'cloud'
+      ? distribution
+      : process.env.DEV_SERVER_COMFYUI_URL?.includes('.comfy.org')
+        ? 'cloud'
+        : 'localhost',
+  __IS_NIGHTLY__: process.env.IS_NIGHTLY === 'true'
+})
 
-/**
- * See https://playwright.dev/docs/test-configuration.
- */
+const maybeLocalOptions: PlaywrightTestConfig = process.env.PLAYWRIGHT_LOCAL
+  ? {
+      timeout: 30_000,
+      retries: 0,
+      workers: 1,
+      use: {
+        trace: 'on',
+        video: 'on',
+        launchOptions: {
+          slowMo: Number(process.env.SLOW_MO) || 0
+        }
+      }
+    }
+  : {
+      retries: process.env.CI ? 3 : 0,
+      workers: process.env.CI ? 2 : undefined,
+      use: {
+        trace: 'on-first-retry',
+        video: process.env.RECORD_VIDEO === 'true' ? 'on' : undefined,
+        launchOptions: {
+          slowMo: Number(process.env.SLOW_MO) || 0
+        }
+      }
+    }
+
 export default defineConfig({
   testDir: './browser_tests',
-  /* Run tests in files in parallel */
+  testIgnore: [
+    '**/liveCloud/**',
+    '**/crossOriginSession/**',
+    '**/*.test.ts',
+    // Untransformed recorder output — still bare codegen, not a runnable spec
+    '**/*.raw.spec.ts',
+    // The recorder's scratch spec calls page.pause(), so collecting it outside
+    // a recording session hangs the suite. comfy-test opts back in.
+    ...(process.env.COMFY_TEST_RECORDING
+      ? []
+      : ['**/_recording-session.spec.ts'])
+  ],
   fullyParallel: true,
-  /* Fail the build on CI if you accidentally left test.only in the source code. */
   forbidOnly: !!process.env.CI,
-  /* Retry on CI only - increased for better flaky test handling */
-  retries: process.env.CI ? 3 : 0,
-  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: 'html',
-  /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
-  use: {
-    /* Base URL to use in actions like `await page.goto('/')`. */
-    // baseURL: 'http://127.0.0.1:3000',
+  reporter: process.env.PLAYWRIGHT_BLOB_OUTPUT_DIR ? 'blob' : 'html',
+  ...maybeLocalOptions,
 
-    /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
-    trace: 'on-first-retry'
-  },
-  /* Path to global setup file. Exported function runs once before all the tests */
-  globalSetup: './browser_tests/globalSetup.ts',
-  /* Path to global teardown file. Exported function runs once after all the tests */
-  globalTeardown: './browser_tests/globalTeardown.ts',
+  globalSetup:
+    process.env.PLAYWRIGHT_CLOUD_LIVE === '1'
+      ? undefined
+      : './browser_tests/globalSetup.ts',
+  globalTeardown:
+    process.env.PLAYWRIGHT_CLOUD_LIVE === '1'
+      ? undefined
+      : './browser_tests/globalTeardown.ts',
 
-  /* Configure projects for major browsers */
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-      timeout: 15000,
-      grepInvert: /@mobile/ // Run all tests except those tagged with @mobile
-    },
+  projects:
+    process.env.PLAYWRIGHT_CLOUD_LIVE === '1'
+      ? [
+          {
+            name: 'cloud-live',
+            testMatch: '**/tests/liveCloud/**/*.spec.ts',
+            testIgnore: [],
+            fullyParallel: false,
+            retries: 0,
+            timeout: 120_000,
+            expect: { timeout: 30_000 },
+            use: {
+              ...devices['Desktop Chrome'],
+              locale: 'en-US',
+              trace: 'off',
+              video: 'off',
+              screenshot: 'off'
+            }
+          } satisfies NonNullable<PlaywrightTestConfig['projects']>[number]
+        ]
+      : [
+          {
+            name: 'chromium',
+            use: { ...devices['Desktop Chrome'] },
+            timeout: 30_000,
+            grepInvert:
+              /@mobile|@perf|@audit|@cloud|@desktop|@custom-nodes|@agent-harness/
+          },
 
-    {
-      name: 'chromium-2x',
-      use: { ...devices['Desktop Chrome'], deviceScaleFactor: 2 },
-      timeout: 15000,
-      grep: /@2x/ // Run all tests tagged with @2x
-    },
+          {
+            name: 'desktop',
+            use: { ...devices['Desktop Chrome'] },
+            timeout: 15000,
+            grep: /@desktop/
+          },
 
-    {
-      name: 'chromium-0.5x',
-      use: { ...devices['Desktop Chrome'], deviceScaleFactor: 0.5 },
-      timeout: 15000,
-      grep: /@0.5x/ // Run all tests tagged with @0.5x
-    },
+          // Runs only against the local agent integration harness
+          // (scripts/dev-agent-integration.ts): the panel's local-agent path gates
+          // on VITE_AGENT_STANDALONE, baked at build time and unset in the CI
+          // dist, so these specs are excluded from every CI project by tag.
+          {
+            name: 'agent-harness',
+            use: { ...devices['Desktop Chrome'] },
+            timeout: 180000,
+            grep: /@agent-harness/
+          },
 
-    // {
-    //   name: 'firefox',
-    //   use: { ...devices['Desktop Firefox'] },
-    // },
+          // The custom-node suite needs the manifest packs installed and a quiet
+          // backend queue, so it runs in its own gating job
+          // (ci-tests-custom-nodes.yaml) with --workers=1, not alongside the
+          // parallel main e2e shards: the auto-run tier waits on the WHOLE queue
+          // to go quiet before it measures, which a parallel shard cannot provide.
+          // retain-on-failure trace: ~40 serial tests, negligible overhead, and a
+          // red run needs 6 installed packs + a live backend to reproduce.
+          {
+            name: 'custom-nodes',
+            use: {
+              ...devices['Desktop Chrome'],
+              trace: 'retain-on-failure'
+            },
+            timeout: 15000,
+            grep: /@custom-nodes/,
+            fullyParallel: false
+          },
 
-    // {
-    //   name: 'webkit',
-    //   use: { ...devices['Desktop Safari'] },
-    // },
+          {
+            name: 'performance',
+            use: {
+              ...devices['Desktop Chrome'],
+              trace: 'retain-on-failure'
+            },
+            timeout: 60_000,
+            grep: /@perf/,
+            fullyParallel: false
+          },
 
-    /* Test against mobile viewports. */
-    {
-      name: 'mobile-chrome',
-      use: { ...devices['Pixel 5'], hasTouch: true },
-      grep: /@mobile/ // Run only tests tagged with @mobile
-    }
-    // {
-    //   name: 'Mobile Safari',
-    //   use: { ...devices['iPhone 12'] },
-    // },
+          {
+            name: 'audit',
+            use: {
+              ...devices['Desktop Chrome'],
+              trace: 'retain-on-failure'
+            },
+            timeout: 120_000,
+            grep: /@audit/,
+            fullyParallel: false
+          },
 
-    /* Test against branded browsers. */
-    // {
-    //   name: 'Microsoft Edge',
-    //   use: { ...devices['Desktop Edge'], channel: 'msedge' },
-    // },
-    // {
-    //   name: 'Google Chrome',
-    //   use: { ...devices['Desktop Chrome'], channel: 'chrome' },
-    // },
-  ]
+          {
+            name: 'chromium-2x',
+            use: { ...devices['Desktop Chrome'], deviceScaleFactor: 2 },
+            timeout: 15000,
+            grep: /@2x/
+          },
 
-  /* Run your local dev server before starting the tests */
-  // webServer: {
-  //   command: 'npm run start',
-  //   url: 'http://127.0.0.1:3000',
-  //   reuseExistingServer: !process.env.CI,
-  // },
+          {
+            name: 'chromium-0.5x',
+            use: { ...devices['Desktop Chrome'], deviceScaleFactor: 0.5 },
+            timeout: 15000,
+            grep: /@0.5x/
+          },
+
+          {
+            name: 'cloud',
+            use: { ...devices['Desktop Chrome'] },
+            timeout: 15000,
+            grep: /@cloud/,
+            grepInvert: /@oss|@mobile-ios/
+          },
+
+          {
+            name: 'mobile-chrome',
+            use: { ...devices['Pixel 5'], hasTouch: true },
+            grep: /@mobile\b/,
+            grepInvert: /@mobile-ios/
+          },
+
+          {
+            name: 'mobile-safari',
+            use: { ...devices['iPhone 15'] },
+            grep: /@mobile-ios/
+          }
+        ]
 })

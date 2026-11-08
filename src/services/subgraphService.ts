@@ -1,11 +1,12 @@
-import {
-  type ExportedSubgraph,
-  type ExportedSubgraphInstance,
-  type Subgraph
+import type {
+  ExportedSubgraph,
+  ExportedSubgraphInstance,
+  Subgraph
 } from '@/lib/litegraph/src/litegraph'
-import type { ComfyWorkflowJSON } from '@/schemas/comfyWorkflowSchema'
-import type { ComfyNodeDef as ComfyNodeDefV1 } from '@/schemas/nodeDefSchema'
-import { app as comfyApp } from '@/scripts/app'
+import { normalizeSubgraphDefinitionIds } from '@/lib/litegraph/src/subgraph/subgraphDeduplication'
+import type { ComfyWorkflowJSON } from '@comfyorg/graph-model/workflowSchema'
+import type { ComfyNodeDef as ComfyNodeDefV1 } from '@comfyorg/object-info-parser'
+import { useApp } from '@/scripts/appInstance'
 import { useNodeDefStore } from '@/stores/nodeDefStore'
 
 import { useLitegraphService } from './litegraphService'
@@ -49,7 +50,7 @@ export const useSubgraphService = () => {
       output_tooltips: [],
       name: id,
       display_name: name,
-      description: `Subgraph node for ${name}`,
+      description: exportedSubgraph.description || `Subgraph node for ${name}`,
       category: 'subgraph',
       output_node: false,
       python_module: 'nodes'
@@ -64,11 +65,27 @@ export const useSubgraphService = () => {
     const subgraphs = graphData.definitions?.subgraphs
     if (!subgraphs) return
 
+    const normalized = normalizeSubgraphDefinitionIds(
+      subgraphs,
+      graphData.nodes
+    )
+    graphData.definitions!.subgraphs = normalized.subgraphs
+    if (normalized.rootNodes) graphData.nodes = normalized.rootNodes
     // Assertion: overriding Zod schema
-    for (const subgraphData of subgraphs as ExportedSubgraph[]) {
-      const subgraph =
-        comfyApp.graph.subgraphs.get(subgraphData.id) ??
-        comfyApp.graph.createSubgraph(subgraphData)
+    const exportedSubgraphs = normalized.subgraphs as ExportedSubgraph[]
+    const missingSubgraphs = exportedSubgraphs.filter(
+      ({ id }) => !useApp().rootGraph.subgraphs.has(id)
+    )
+    const createdSubgraphs =
+      useApp().rootGraph.createSubgraphs(missingSubgraphs)
+    const loadedSubgraphs = new Map(useApp().rootGraph.subgraphs)
+    for (const [index, data] of missingSubgraphs.entries()) {
+      loadedSubgraphs.set(data.id, createdSubgraphs[index])
+    }
+
+    for (const subgraphData of exportedSubgraphs) {
+      const subgraph = loadedSubgraphs.get(subgraphData.id)
+      if (!subgraph) continue
 
       registerNewSubgraph(subgraph, subgraphData)
     }

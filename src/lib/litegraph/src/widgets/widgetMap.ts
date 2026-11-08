@@ -1,40 +1,180 @@
-import type { LGraphNode } from '@/lib/litegraph/src/LGraphNode'
+import type { LGraphNode } from '@comfyorg/graph-model/entityRegistry'
+
 import type {
+  IAssetWidget,
   IBaseWidget,
-  IBooleanWidget,
-  IButtonWidget,
   IComboWidget,
-  ICustomWidget,
-  IKnobWidget,
-  INumericWidget,
-  ISliderWidget,
-  IStringWidget,
   IWidget,
   TWidgetType
-} from '@/lib/litegraph/src/types/widgets'
-import { toClass } from '@/lib/litegraph/src/utils/type'
+} from '@comfyorg/graph-model/widgets'
+import { toClass as instantiateClass } from '@/lib/litegraph/src/utils/type'
 
+import { AssetWidget } from './AssetWidget'
 import { BaseWidget } from './BaseWidget'
 import { BooleanWidget } from './BooleanWidget'
+import { BoundingBoxWidget } from './BoundingBoxWidget'
 import { ButtonWidget } from './ButtonWidget'
+import { ChartWidget } from './ChartWidget'
+import { ColorWidget } from './ColorWidget'
 import { ComboWidget } from './ComboWidget'
+import { CurveWidget } from './CurveWidget'
+import { FileUploadWidget } from './FileUploadWidget'
+import { GalleriaWidget } from './GalleriaWidget'
+import { GradientSliderWidget } from './GradientSliderWidget'
+import { ImageCompareWidget } from './ImageCompareWidget'
+import { BoundingBoxesWidget } from './BoundingBoxesWidget'
+import { LightInfoWidget } from './LightInfoWidget'
+import { ColorsWidget } from './ColorsWidget'
+import { CompositorWidget } from './CompositorWidget'
+import { PainterWidget } from './PainterWidget'
+import { RangeWidget } from './RangeWidget'
+import { VideoEditWidget } from './VideoEditWidget'
+import { ImageCropWidget } from './ImageCropWidget'
 import { KnobWidget } from './KnobWidget'
 import { LegacyWidget } from './LegacyWidget'
+import { MarkdownWidget } from './MarkdownWidget'
+import { MultiSelectWidget } from './MultiSelectWidget'
 import { NumberWidget } from './NumberWidget'
+import { SelectButtonWidget } from './SelectButtonWidget'
 import { SliderWidget } from './SliderWidget'
 import { TextWidget } from './TextWidget'
+import { TextareaWidget } from './TextareaWidget'
+import { TreeSelectWidget } from './TreeSelectWidget'
 
 export type WidgetTypeMap = {
   button: ButtonWidget
   toggle: BooleanWidget
   slider: SliderWidget
+  gradientslider: GradientSliderWidget
   knob: KnobWidget
   combo: ComboWidget
   number: NumberWidget
   string: TextWidget
   text: TextWidget
   custom: LegacyWidget
+  fileupload: FileUploadWidget
+  color: ColorWidget
+  markdown: MarkdownWidget
+  treeselect: TreeSelectWidget
+  multiselect: MultiSelectWidget
+  chart: ChartWidget
+  galleria: GalleriaWidget
+  imagecompare: ImageCompareWidget
+  selectbutton: SelectButtonWidget
+  textarea: TextareaWidget
+  asset: AssetWidget
+  imagecrop: ImageCropWidget
+  boundingbox: BoundingBoxWidget
+  curve: CurveWidget
+  painter: PainterWidget
+  compositor: CompositorWidget
+  range: RangeWidget
+  videoedit: VideoEditWidget
+  boundingboxes: BoundingBoxesWidget
+  lightinfo: LightInfoWidget
+  colors: ColorsWidget
   [key: string]: BaseWidget
+}
+
+const toWidgetClass = instantiateClass
+
+function collectDescriptors(value: object) {
+  const descriptors = new Map<PropertyKey, PropertyDescriptor>()
+  let current: object | null = value
+  while (current && current !== Object.prototype) {
+    for (const key of Reflect.ownKeys(current)) {
+      if (key === 'constructor' || descriptors.has(key)) continue
+      const descriptor = Object.getOwnPropertyDescriptor(current, key)
+      if (descriptor) descriptors.set(key, descriptor)
+    }
+    current = Object.getPrototypeOf(current) as object | null
+  }
+  return descriptors
+}
+
+function preserveHiddenFacade(
+  descriptors: Map<PropertyKey, PropertyDescriptor>,
+  foreignDescriptors: Map<PropertyKey, PropertyDescriptor>
+): void {
+  const concrete = descriptors.get('hidden')
+  const foreign = foreignDescriptors.get('hidden')
+  if (!concrete?.get || !concrete.set || !foreign || foreign.get || foreign.set)
+    return
+
+  descriptors.set('hidden', {
+    configurable: foreign.configurable,
+    enumerable: foreign.enumerable,
+    get: concrete.get,
+    set: concrete.set
+  })
+}
+
+function mergeDescriptor(
+  concrete: PropertyDescriptor | undefined,
+  foreign: PropertyDescriptor,
+  ownForeign: PropertyDescriptor | undefined
+): PropertyDescriptor {
+  if (!concrete) return foreign
+
+  const concreteIsGetterOnly = concrete.get && !concrete.set
+  if (concreteIsGetterOnly && foreign.set) {
+    return { ...foreign, get: foreign.get ?? concrete.get }
+  }
+  if (concreteIsGetterOnly && ownForeign?.writable) return foreign
+  if (!foreign.get && !foreign.set) return concrete
+  if (!concrete.get || !concrete.set) return concrete
+
+  return {
+    configurable: foreign.configurable,
+    enumerable: foreign.enumerable,
+    get() {
+      foreign.get?.call(this)
+      return concrete.get?.call(this)
+    },
+    set(value: unknown) {
+      foreign.set?.call(this, value)
+      const normalised = foreign.get?.call(this)
+      concrete.set?.call(this, normalised === undefined ? value : normalised)
+    }
+  }
+}
+
+function adoptConcreteWidget<C extends BaseWidget>(
+  widget: IBaseWidget,
+  concrete: C
+): C {
+  if (concrete === widget || !Object.isExtensible(widget)) return concrete
+
+  const rawOptions = widget.options
+  const descriptors = collectDescriptors(concrete)
+  const foreignDescriptors = collectDescriptors(widget)
+  for (const [key, foreignDescriptor] of foreignDescriptors) {
+    if (key === 'options') continue
+    const descriptor = mergeDescriptor(
+      descriptors.get(key),
+      foreignDescriptor,
+      Object.getOwnPropertyDescriptor(widget, key)
+    )
+    if (key === 'disabled' && foreignDescriptor.get)
+      descriptor.get = foreignDescriptor.get
+    descriptors.set(key, descriptor)
+  }
+  preserveHiddenFacade(descriptors, foreignDescriptors)
+
+  if (
+    Reflect.ownKeys(widget).some(
+      (key) =>
+        descriptors.has(key) &&
+        Object.getOwnPropertyDescriptor(widget, key)?.configurable === false
+    ) ||
+    !Reflect.setPrototypeOf(widget, Object.getPrototypeOf(concrete))
+  )
+    return concrete
+
+  Object.defineProperties(widget, Object.fromEntries(descriptors))
+  const adopted = widget as unknown as C
+  if (adopted instanceof BaseWidget) adopted.options = rawOptions
+  return adopted
 }
 
 /**
@@ -59,6 +199,18 @@ export function toConcreteWidget<TWidget extends IWidget | IBaseWidget>(
   node: LGraphNode,
   wrapLegacyWidgets = true
 ): WidgetTypeMap[TWidget['type']] | undefined {
+  const concrete = instantiateConcreteWidget(widget, node, wrapLegacyWidgets)
+  return concrete && wrapLegacyWidgets
+    ? adoptConcreteWidget(widget, concrete)
+    : concrete
+}
+
+function instantiateConcreteWidget<TWidget extends IWidget | IBaseWidget>(
+  widget: TWidget,
+  node: LGraphNode,
+  wrapLegacyWidgets: boolean
+): WidgetTypeMap[TWidget['type']] | undefined {
+  if (widget instanceof LegacyWidget && !wrapLegacyWidgets) return undefined
   if (widget instanceof BaseWidget) return widget
 
   // Assertion: TypeScript has no concept of "all strings except X"
@@ -67,72 +219,83 @@ export function toConcreteWidget<TWidget extends IWidget | IBaseWidget>(
 
   switch (narrowedWidget.type) {
     case 'button':
-      return toClass(ButtonWidget, narrowedWidget, node)
+      return toWidgetClass(ButtonWidget, narrowedWidget, node)
     case 'toggle':
-      return toClass(BooleanWidget, narrowedWidget, node)
+      return toWidgetClass(BooleanWidget, narrowedWidget, node)
     case 'slider':
-      return toClass(SliderWidget, narrowedWidget, node)
+      return toWidgetClass(SliderWidget, narrowedWidget, node)
+    case 'gradientslider':
+      return toWidgetClass(GradientSliderWidget, narrowedWidget, node)
     case 'knob':
-      return toClass(KnobWidget, narrowedWidget, node)
+      return toWidgetClass(KnobWidget, narrowedWidget, node)
     case 'combo':
-      return toClass(ComboWidget, narrowedWidget, node)
+      return toWidgetClass(ComboWidget, narrowedWidget, node)
     case 'number':
-      return toClass(NumberWidget, narrowedWidget, node)
+      return toWidgetClass(NumberWidget, narrowedWidget, node)
     case 'string':
-      return toClass(TextWidget, narrowedWidget, node)
+      return toWidgetClass(TextWidget, narrowedWidget, node)
     case 'text':
-      return toClass(TextWidget, narrowedWidget, node)
+      return toWidgetClass(TextWidget, narrowedWidget, node)
+    case 'fileupload':
+      return toWidgetClass(FileUploadWidget, narrowedWidget, node)
+    case 'color':
+      return toWidgetClass(ColorWidget, narrowedWidget, node)
+    case 'markdown':
+      return toWidgetClass(MarkdownWidget, narrowedWidget, node)
+    case 'treeselect':
+      return toWidgetClass(TreeSelectWidget, narrowedWidget, node)
+    case 'multiselect':
+      return toWidgetClass(MultiSelectWidget, narrowedWidget, node)
+    case 'chart':
+      return toWidgetClass(ChartWidget, narrowedWidget, node)
+    case 'galleria':
+      return toWidgetClass(GalleriaWidget, narrowedWidget, node)
+    case 'imagecompare':
+      return toWidgetClass(ImageCompareWidget, narrowedWidget, node)
+    case 'selectbutton':
+      return toWidgetClass(SelectButtonWidget, narrowedWidget, node)
+    case 'textarea':
+      return toWidgetClass(TextareaWidget, narrowedWidget, node)
+    case 'asset':
+      return toWidgetClass(AssetWidget, narrowedWidget, node)
+    case 'imagecrop':
+      return toWidgetClass(ImageCropWidget, narrowedWidget, node)
+    case 'boundingbox':
+      return toWidgetClass(BoundingBoxWidget, narrowedWidget, node)
+    case 'curve':
+      return toWidgetClass(CurveWidget, narrowedWidget, node)
+    case 'painter':
+      return toWidgetClass(PainterWidget, narrowedWidget, node)
+    case 'compositor':
+      return toWidgetClass(CompositorWidget, narrowedWidget, node)
+    case 'range':
+      return toWidgetClass(RangeWidget, narrowedWidget, node)
+    case 'videoedit':
+      return toWidgetClass(VideoEditWidget, narrowedWidget, node)
+    case 'boundingboxes':
+      return toWidgetClass(BoundingBoxesWidget, narrowedWidget, node)
+    case 'lightinfo':
+      return toWidgetClass(LightInfoWidget, narrowedWidget, node)
+    case 'colors':
+      return toWidgetClass(ColorsWidget, narrowedWidget, node)
     default: {
-      if (wrapLegacyWidgets) return toClass(LegacyWidget, widget, node)
+      if (wrapLegacyWidgets) return toWidgetClass(LegacyWidget, widget, node)
     }
   }
 }
 
 // #region Type Guards
 
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link IButtonWidget}. */
-export function isButtonWidget(widget: IBaseWidget): widget is IButtonWidget {
-  return widget.type === 'button'
-}
-
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link IBooleanWidget}. */
-export function isBooleanWidget(widget: IBaseWidget): widget is IBooleanWidget {
-  return widget.type === 'toggle'
-}
-
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link ISliderWidget}. */
-export function isSliderWidget(widget: IBaseWidget): widget is ISliderWidget {
-  return widget.type === 'slider'
-}
-
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link IKnobWidget}. */
-export function isKnobWidget(widget: IBaseWidget): widget is IKnobWidget {
-  return widget.type === 'knob'
-}
-
 /** Type guard: Narrow **from {@link IBaseWidget}** to {@link IComboWidget}. */
 export function isComboWidget(widget: IBaseWidget): widget is IComboWidget {
   return widget.type === 'combo'
 }
 
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link INumericWidget}. */
-export function isNumberWidget(widget: IBaseWidget): widget is INumericWidget {
-  return widget.type === 'number'
-}
-
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link IStringWidget}. */
-export function isStringWidget(widget: IBaseWidget): widget is IStringWidget {
-  return widget.type === 'string'
-}
-
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link ITextWidget}. */
-export function isTextWidget(widget: IBaseWidget): widget is IStringWidget {
-  return widget.type === 'text'
-}
-
-/** Type guard: Narrow **from {@link IBaseWidget}** to {@link ICustomWidget}. */
-export function isCustomWidget(widget: IBaseWidget): widget is ICustomWidget {
-  return widget.type === 'custom'
+/**
+ * Type guard: Narrow **from {@link IBaseWidget}** to {@link IAssetWidget}.
+ */
+export function isAssetWidget(widget: IBaseWidget): widget is IAssetWidget {
+  return widget.type === 'asset'
 }
 
 // #endregion Type Guards

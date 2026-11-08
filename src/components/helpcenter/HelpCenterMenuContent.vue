@@ -1,27 +1,55 @@
 <template>
-  <div class="help-center-menu" role="menu" aria-label="Help Center Menu">
+  <div
+    class="help-center-menu flex flex-col items-start gap-1"
+    role="menu"
+    :aria-label="$t('help.helpCenterMenu')"
+  >
     <!-- Main Menu Items -->
-    <nav class="help-menu-section" role="menubar">
-      <button
-        v-for="menuItem in menuItems"
-        v-show="menuItem.visible !== false"
-        :key="menuItem.key"
-        type="button"
-        class="help-menu-item"
-        :class="{ 'more-item': menuItem.key === 'more' }"
-        role="menuitem"
-        @click="menuItem.action"
-        @mouseenter="onMenuItemHover(menuItem.key, $event)"
-        @mouseleave="onMenuItemLeave(menuItem.key)"
+    <div class="w-full">
+      <nav class="flex w-full flex-col gap-2" role="menubar">
+        <button
+          v-for="menuItem in menuItems"
+          v-show="menuItem.visible !== false"
+          :key="menuItem.key"
+          type="button"
+          class="help-menu-item"
+          :class="{ 'more-item': menuItem.key === 'more' }"
+          :data-testid="`help-menu-item-${menuItem.key}`"
+          role="menuitem"
+          @click="menuItem.action"
+          @mouseenter="onMenuItemHover(menuItem.key, $event)"
+          @mouseleave="onMenuItemLeave(menuItem.key)"
+        >
+          <div class="help-menu-icon-container">
+            <div class="help-menu-icon">
+              <component
+                :is="menuItem.icon"
+                v-if="typeof menuItem.icon === 'object'"
+                :size="16"
+              />
+              <i v-else :class="menuItem.icon" />
+            </div>
+            <div v-if="menuItem.showRedDot" class="menu-red-dot" />
+          </div>
+          <span class="menu-label">{{ menuItem.label }}</span>
+          <i
+            v-if="menuItem.showExternalIcon"
+            class="ml-auto icon-[lucide--external-link] text-primary"
+          />
+          <i
+            v-if="menuItem.key === 'more'"
+            class="ml-auto icon-[lucide--chevron-right]"
+          />
+        </button>
+      </nav>
+      <div
+        class="flex h-4 flex-col items-center justify-between self-stretch p-2"
       >
-        <i :class="menuItem.icon" class="help-menu-icon" />
-        <span class="menu-label">{{ menuItem.label }}</span>
-        <i v-if="menuItem.key === 'more'" class="pi pi-chevron-right" />
-      </button>
-    </nav>
+        <div class="w-full border-b" />
+      </div>
+    </div>
 
-    <!-- More Submenu -->
-    <Teleport to="body">
+    <Teleport :to="config.teleportTo ?? 'body'">
       <div
         v-if="isSubmenuVisible"
         ref="submenuRef"
@@ -54,22 +82,35 @@
     </Teleport>
 
     <!-- What's New Section -->
-    <section v-if="showVersionUpdates" class="whats-new-section">
-      <h3 class="section-description">{{ $t('helpCenter.whatsNew') }}</h3>
+    <section
+      v-if="showVersionUpdates"
+      class="w-full"
+      data-testid="whats-new-section"
+    >
+      <h3
+        class="section-description flex items-center gap-2.5 self-stretch px-8 py-2"
+      >
+        {{ $t('helpCenter.whatsNew') }}
+      </h3>
 
       <!-- Release Items -->
-      <div v-if="hasReleases" role="group" aria-label="Recent releases">
+      <div
+        v-if="hasReleases"
+        role="group"
+        :aria-label="$t('help.recentReleases')"
+      >
         <article
           v-for="release in releaseStore.recentReleases"
           :key="release.id || release.version"
-          class="help-menu-item release-menu-item"
+          class="release-menu-item flex h-12 min-h-6 cursor-pointer items-center gap-2 self-stretch rounded-sm p-2 transition-colors hover:bg-accent"
+          :data-testid="`help-release-item-${release.version}`"
           role="button"
           tabindex="0"
           @click="onReleaseClick(release)"
           @keydown.enter="onReleaseClick(release)"
           @keydown.space.prevent="onReleaseClick(release)"
         >
-          <i class="pi pi-refresh help-menu-icon" aria-hidden="true" />
+          <i class="help-menu-icon icon-[lucide--package]" aria-hidden="true" />
           <div class="release-content">
             <span class="release-title">
               {{
@@ -88,13 +129,6 @@
               </span>
             </time>
           </div>
-          <Button
-            v-if="shouldShowUpdateButton(release)"
-            :label="$t('helpCenter.updateAvailable')"
-            size="small"
-            class="update-button"
-            @click.stop="onUpdate(release)"
-          />
         </article>
       </div>
 
@@ -105,13 +139,16 @@
         role="status"
         aria-live="polite"
       >
-        <i class="pi pi-spin pi-spinner help-menu-icon" aria-hidden="true" />
+        <i
+          class="help-menu-icon icon-[lucide--loader-circle] animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
         <span>{{ $t('helpCenter.loadingReleases') }}</span>
       </div>
 
       <!-- No Releases State -->
       <div v-else class="help-menu-item" role="status">
-        <i class="pi pi-info-circle help-menu-icon" aria-hidden="true" />
+        <i class="help-menu-icon icon-[lucide--info]" aria-hidden="true" />
         <span>{{ $t('helpCenter.noRecentReleases') }}</span>
       </div>
     </section>
@@ -119,37 +156,51 @@
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import { type CSSProperties, computed, nextTick, onMounted, ref } from 'vue'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { injectConfigProviderContext } from 'reka-ui'
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref
+} from 'vue'
+import type { CSSProperties, Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { type ReleaseNote } from '@/services/releaseService'
-import { useCommandStore } from '@/stores/commandStore'
-import { useReleaseStore } from '@/stores/releaseStore'
-import { useSettingStore } from '@/stores/settingStore'
-import { electronAPI, isElectron } from '@/utils/envUtil'
+import PuzzleIcon from '@comfyorg/design-system/icon/PuzzleIcon'
+import { useExternalLink } from '@/composables/useExternalLink'
+import { isCloud, isDesktop, isNightly } from '@/platform/distribution/types'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { buildFeedbackTypeformUrl } from '@/platform/support/config'
+import { useTelemetry } from '@comfyorg/telemetry'
+import type { ReleaseNote } from '@/platform/updates/common/releaseService'
+import { useReleaseStore } from '@/platform/updates/common/releaseStore'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import { getErrorMessage } from '@comfyorg/shared-frontend-utils/errorUtil'
+import { electronAPI } from '@/utils/envUtil'
 import { formatVersionAnchor } from '@/utils/formatUtil'
+import { useConflictAcknowledgment } from '@/platform/customNodes/manager/composables/useConflictAcknowledgment'
+import { useManagerDialog } from '@/platform/customNodes/manager/composables/dialogs/useManagerDialog'
+import { useManagerState } from '@/platform/customNodes/manager/composables/useManagerState'
+import { useComfyManagerService } from '@/platform/customNodes/manager/services/comfyManagerService'
+import { ManagerTab } from '@/platform/customNodes/manager/types/comfyManagerTypes'
 
 // Types
 interface MenuItem {
   key: string
-  icon?: string
+  icon?: string | Component
   label?: string
   action?: () => void
   visible?: boolean
   type?: 'item' | 'divider'
   items?: MenuItem[]
+  showRedDot?: boolean
+  showExternalIcon?: boolean
 }
 
 // Constants
-const EXTERNAL_LINKS = {
-  DOCS: 'https://docs.comfy.org/',
-  DISCORD: 'https://www.comfy.org/discord',
-  GITHUB: 'https://github.com/comfyanonymous/ComfyUI',
-  DESKTOP_GUIDE: 'https://comfyorg.notion.site/',
-  UPDATE_GUIDE: 'https://docs.comfy.org/installation/update_comfyui'
-} as const
-
 const TIME_UNITS = {
   MINUTE: 60 * 1000,
   HOUR: 60 * 60 * 1000,
@@ -161,15 +212,21 @@ const TIME_UNITS = {
 
 const SUBMENU_CONFIG = {
   DELAY_MS: 100,
-  OFFSET_PX: 8,
-  Z_INDEX: 10001
+  OFFSET_PX: 8
 } as const
 
 // Composables
-const { t, locale } = useI18n()
+const config = reactive(injectConfigProviderContext(null) ?? {})
+const { t } = useI18n()
+const toast = useToast()
+const { staticUrls, buildDocsUrl } = useExternalLink()
 const releaseStore = useReleaseStore()
 const commandStore = useCommandStore()
 const settingStore = useSettingStore()
+const telemetry = useTelemetry()
+
+// Track when help center was opened
+const openedAt = ref(Date.now())
 
 // Emits
 const emit = defineEmits<{
@@ -187,6 +244,12 @@ const hasReleases = computed(() => releaseStore.releases.length > 0)
 const showVersionUpdates = computed(() =>
   settingStore.get('Comfy.Notification.ShowVersionUpdates')
 )
+const isDevMode = computed(() => settingStore.get('Comfy.DevMode'))
+
+// Use conflict acknowledgment state from composable
+const { shouldShowRedDot: shouldShowManagerRedDot } =
+  useConflictAcknowledgment()
+const { isNewManagerUI } = useManagerState()
 
 const moreItems = computed<MenuItem[]>(() => {
   const allMoreItems: MenuItem[] = [
@@ -194,9 +257,15 @@ const moreItems = computed<MenuItem[]>(() => {
       key: 'desktop-guide',
       type: 'item',
       label: t('helpCenter.desktopUserGuide'),
-      visible: isElectron(),
+      visible: isDesktop,
       action: () => {
-        openExternalLink(EXTERNAL_LINKS.DESKTOP_GUIDE)
+        trackResourceClick('docs', true)
+        openExternalLink(
+          buildDocsUrl('/installation/desktop', {
+            includeLocale: true,
+            platform: true
+          })
+        )
         emit('close')
       }
     },
@@ -204,7 +273,7 @@ const moreItems = computed<MenuItem[]>(() => {
       key: 'dev-tools',
       type: 'item',
       label: t('helpCenter.openDevTools'),
-      visible: isElectron(),
+      visible: isDesktop,
       action: () => {
         openDevTools()
         emit('close')
@@ -213,15 +282,25 @@ const moreItems = computed<MenuItem[]>(() => {
     {
       key: 'divider-1',
       type: 'divider',
-      visible: isElectron()
+      visible: isDesktop
     },
     {
       key: 'reinstall',
       type: 'item',
       label: t('helpCenter.reinstall'),
-      visible: isElectron(),
+      visible: isDesktop,
       action: () => {
         onReinstall()
+        emit('close')
+      }
+    },
+    {
+      key: 'replay-onboarding',
+      type: 'item',
+      label: t('commands.Comfy_Onboarding_Replay.label'),
+      visible: isDevMode.value,
+      action: () => {
+        void commandStore.execute('Comfy.Onboarding.Replay')
         emit('close')
       }
     }
@@ -240,14 +319,48 @@ const moreMenuItem = computed(() =>
 )
 
 const menuItems = computed<MenuItem[]>(() => {
-  return [
+  const items: MenuItem[] = [
+    {
+      key: 'feedback',
+      type: 'item',
+      icon: 'icon-[lucide--megaphone] size-4',
+      label: t('helpCenter.feedback'),
+      showExternalIcon: isCloud || isNightly,
+      action: () => {
+        trackResourceClick('help_feedback', isCloud || isNightly)
+        if (isCloud || isNightly) {
+          window.open(
+            buildFeedbackTypeformUrl('help-center'),
+            '_blank',
+            'noopener,noreferrer'
+          )
+        } else {
+          void commandStore.execute('Comfy.ContactSupport')
+        }
+        emit('close')
+      }
+    },
+    {
+      key: 'help',
+      type: 'item',
+      icon: 'icon-[lucide--message-circle-question]',
+      label: t('helpCenter.help'),
+      action: () => {
+        trackResourceClick('help_feedback', false)
+        void commandStore.execute('Comfy.ContactSupport')
+        emit('close')
+      }
+    },
     {
       key: 'docs',
       type: 'item',
-      icon: 'pi pi-book',
+      icon: 'icon-[lucide--book-open]',
       label: t('helpCenter.docs'),
+      showExternalIcon: true,
       action: () => {
-        openExternalLink(EXTERNAL_LINKS.DOCS)
+        trackResourceClick('docs', true)
+        const path = isCloud ? '/get_started/cloud' : '/'
+        openExternalLink(buildDocsUrl(path, { includeLocale: true }))
         emit('close')
       }
     },
@@ -256,44 +369,107 @@ const menuItems = computed<MenuItem[]>(() => {
       type: 'item',
       icon: 'pi pi-discord',
       label: 'Discord',
+      showExternalIcon: true,
       action: () => {
-        openExternalLink(EXTERNAL_LINKS.DISCORD)
+        trackResourceClick('discord', true)
+        openExternalLink(staticUrls.discord)
         emit('close')
       }
     },
     {
       key: 'github',
       type: 'item',
-      icon: 'pi pi-github',
+      icon: 'icon-[lucide--github]',
       label: t('helpCenter.github'),
+      showExternalIcon: true,
       action: () => {
-        openExternalLink(EXTERNAL_LINKS.GITHUB)
+        trackResourceClick('github', true)
+        openExternalLink(staticUrls.github)
         emit('close')
       }
-    },
-    {
-      key: 'help',
-      type: 'item',
-      icon: 'pi pi-question-circle',
-      label: t('helpCenter.helpFeedback'),
-      action: () => {
-        void commandStore.execute('Comfy.Feedback')
-        emit('close')
-      }
-    },
-    {
-      key: 'more',
-      type: 'item',
-      icon: '',
-      label: t('helpCenter.more'),
-      visible: hasVisibleMoreItems.value,
-      action: () => {}, // No action for more item
-      items: moreItems.value
     }
   ]
+
+  // System status page - only in cloud distributions
+  if (isCloud) {
+    items.push({
+      key: 'status',
+      type: 'item',
+      icon: 'icon-[lucide--activity]',
+      label: t('helpCenter.systemStatus'),
+      showExternalIcon: true,
+      action: () => {
+        trackResourceClick('status', true)
+        openExternalLink(staticUrls.status)
+        emit('close')
+      }
+    })
+  }
+
+  // Extension manager - only in non-cloud distributions
+  if (!isCloud) {
+    items.push({
+      key: 'manager',
+      type: 'item',
+      icon: PuzzleIcon,
+      label: t('helpCenter.managerExtension'),
+      showRedDot: shouldShowManagerRedDot.value,
+      action: async () => {
+        trackResourceClick('manager', false)
+        await useManagerDialog().openManager({
+          initialTab: ManagerTab.All,
+          showToastOnLegacyError: false
+        })
+        emit('close')
+      }
+    })
+  }
+  // Update ComfyUI - only for non-desktop, non-cloud with new manager UI
+  if (!isDesktop && !isCloud && isNewManagerUI.value) {
+    items.push({
+      key: 'update-comfyui',
+      type: 'item',
+      icon: 'icon-[lucide--download]',
+      label: t('helpCenter.updateComfyUI'),
+      action: () => {
+        onUpdateComfyUI()
+        emit('close')
+      }
+    })
+  }
+
+  items.push({
+    key: 'more',
+    type: 'item',
+    icon: '',
+    label: t('helpCenter.more'),
+    visible: hasVisibleMoreItems.value,
+    action: () => {}, // No action for more item
+    items: moreItems.value
+  })
+
+  return items
 })
 
 // Utility Functions
+const trackResourceClick = (
+  resourceType:
+    | 'docs'
+    | 'discord'
+    | 'github'
+    | 'help_feedback'
+    | 'manager'
+    | 'release_notes'
+    | 'status',
+  isExternal: boolean
+): void => {
+  telemetry?.trackHelpResourceClicked({
+    resource_type: resourceType,
+    is_external: isExternal,
+    source: 'help_center'
+  })
+}
+
 const openExternalLink = (url: string): void => {
   window.open(url, '_blank', 'noopener,noreferrer')
 }
@@ -307,39 +483,28 @@ const clearHoverTimeout = (): void => {
 
 const calculateSubmenuPosition = (button: HTMLElement): CSSProperties => {
   const rect = button.getBoundingClientRect()
-  const submenuWidth = 210 // Width defined in CSS
+  const submenuWidth = 210
 
-  // Get actual submenu height if available, otherwise estimate based on visible item count
   const visibleItemCount =
     moreMenuItem.value?.items?.filter((item) => item.visible !== false)
       .length || 0
-  const estimatedHeight = visibleItemCount * 48 + 16 // ~48px per item + padding
+  const estimatedHeight = visibleItemCount * 48 + 16
   const submenuHeight = submenuRef.value?.offsetHeight || estimatedHeight
 
-  // Get viewport dimensions
   const viewportWidth = window.innerWidth
   const viewportHeight = window.innerHeight
 
-  // Calculate basic position (aligned with button)
   let top = rect.top
   let left = rect.right + SUBMENU_CONFIG.OFFSET_PX
 
-  // Check if submenu would overflow viewport on the right
   if (left + submenuWidth > viewportWidth) {
-    // Position submenu to the left of the button instead
     left = rect.left - submenuWidth - SUBMENU_CONFIG.OFFSET_PX
   }
 
-  // Check if submenu would overflow viewport at the bottom
   if (top + submenuHeight > viewportHeight) {
-    // Position submenu above the button, aligned to bottom
-    top = Math.max(
-      SUBMENU_CONFIG.OFFSET_PX, // Minimum distance from top of viewport
-      rect.bottom - submenuHeight
-    )
+    top = Math.max(SUBMENU_CONFIG.OFFSET_PX, rect.bottom - submenuHeight)
   }
 
-  // Ensure submenu doesn't go above viewport
   if (top < SUBMENU_CONFIG.OFFSET_PX) {
     top = SUBMENU_CONFIG.OFFSET_PX
   }
@@ -349,8 +514,7 @@ const calculateSubmenuPosition = (button: HTMLElement): CSSProperties => {
   return {
     position: 'fixed',
     top: `${top}px`,
-    left: `${left}px`,
-    zIndex: SUBMENU_CONFIG.Z_INDEX
+    left: `${left}px`
   }
 }
 
@@ -362,29 +526,22 @@ const formatReleaseDate = (dateString?: string): string => {
   const diffTime = Math.abs(now.getTime() - date.getTime())
 
   const timeUnits = [
-    { unit: TIME_UNITS.YEAR, suffix: 'y' },
-    { unit: TIME_UNITS.MONTH, suffix: 'mo' },
-    { unit: TIME_UNITS.WEEK, suffix: 'w' },
-    { unit: TIME_UNITS.DAY, suffix: 'd' },
-    { unit: TIME_UNITS.HOUR, suffix: 'h' },
-    { unit: TIME_UNITS.MINUTE, suffix: 'min' }
+    { unit: TIME_UNITS.YEAR, key: 'yearsAgo' },
+    { unit: TIME_UNITS.MONTH, key: 'monthsAgo' },
+    { unit: TIME_UNITS.WEEK, key: 'weeksAgo' },
+    { unit: TIME_UNITS.DAY, key: 'daysAgo' },
+    { unit: TIME_UNITS.HOUR, key: 'hoursAgo' },
+    { unit: TIME_UNITS.MINUTE, key: 'minutesAgo' }
   ]
 
-  for (const { unit, suffix } of timeUnits) {
+  for (const { unit, key } of timeUnits) {
     const value = Math.floor(diffTime / unit)
     if (value > 0) {
-      return `${value}${suffix} ago`
+      return t(`g.relativeTime.${key}`, { count: value })
     }
   }
 
-  return 'now'
-}
-
-const shouldShowUpdateButton = (release: ReleaseNote): boolean => {
-  return (
-    releaseStore.shouldShowUpdateButton &&
-    release === releaseStore.recentReleases[0]
-  )
+  return t('g.relativeTime.now')
 }
 
 // Event Handlers
@@ -434,80 +591,106 @@ const onSubmenuLeave = (): void => {
 }
 
 const openDevTools = (): void => {
-  if (isElectron()) {
+  if (isDesktop) {
     electronAPI().openDevTools()
   }
 }
 
 const onReinstall = (): void => {
-  if (isElectron()) {
+  if (isDesktop) {
     void electronAPI().reinstall()
   }
 }
 
+const onUpdateComfyUI = async (): Promise<void> => {
+  const { updateComfyUI, startQueue, rebootComfyUI, error } =
+    useComfyManagerService()
+
+  toast.info(t('helpCenter.updateComfyUIStarted'), {
+    description: t('helpCenter.updateComfyUIStartedDetail'),
+    duration: 3000
+  })
+
+  try {
+    const result = await updateComfyUI({ is_stable: true })
+    if (result !== null) await startQueue()
+
+    if (result === null || error.value) {
+      toast.error(t('g.error'), {
+        description: error.value || t('helpCenter.updateComfyUIFailed')
+      })
+      return
+    }
+
+    toast.success(t('helpCenter.updateComfyUISuccess'), {
+      description: t('helpCenter.updateComfyUISuccessDetail'),
+      duration: 3000
+    })
+
+    await rebootComfyUI()
+  } catch (err) {
+    toast.error(t('g.error'), {
+      description: getErrorMessage(err) ?? t('g.unknownError')
+    })
+  }
+}
+
 const onReleaseClick = (release: ReleaseNote): void => {
+  trackResourceClick('release_notes', true)
   void releaseStore.handleShowChangelog(release.version)
   const versionAnchor = formatVersionAnchor(release.version)
-  const changelogUrl = `${getChangelogUrl()}#${versionAnchor}`
+  const changelogUrl = `${buildDocsUrl('/changelog', { includeLocale: true })}#${versionAnchor}`
   openExternalLink(changelogUrl)
   emit('close')
 }
 
-const onUpdate = (_: ReleaseNote): void => {
-  openExternalLink(EXTERNAL_LINKS.UPDATE_GUIDE)
-  emit('close')
-}
-
-// Generate language-aware changelog URL
-const getChangelogUrl = (): string => {
-  const isChineseLocale = locale.value === 'zh'
-  return isChineseLocale
-    ? 'https://docs.comfy.org/zh-CN/changelog'
-    : 'https://docs.comfy.org/changelog'
-}
-
 // Lifecycle
 onMounted(async () => {
+  telemetry?.trackHelpCenterOpened({ source: 'sidebar' })
   if (!hasReleases.value) {
     await releaseStore.fetchReleases()
   }
+})
+
+onBeforeUnmount(() => {
+  const timeSpentSeconds = Math.round((Date.now() - openedAt.value) / 1000)
+  telemetry?.trackHelpCenterClosed({ time_spent_seconds: timeSpentSeconds })
 })
 </script>
 
 <style scoped>
 .help-center-menu {
-  width: 380px;
+  width: 256px;
   max-height: 500px;
   overflow-y: auto;
-  background: var(--p-content-background);
-  border-radius: 12px;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-  border: 1px solid var(--p-content-border-color);
-  backdrop-filter: blur(8px);
+  background: var(--popover);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+  border: 1px solid var(--border);
+  padding: 12px 8px;
   position: relative;
-}
-
-.help-menu-section {
-  padding: 0.5rem 0;
-  border-bottom: 1px solid var(--p-content-border-color);
 }
 
 .help-menu-item {
   display: flex;
   align-items: center;
   width: 100%;
-  padding: 0.75rem 1rem;
+  height: 32px;
+  min-height: 24px;
+  padding: 8px;
+  gap: 8px;
   background: transparent;
   border: none;
+  border-radius: 4px;
   cursor: pointer;
   transition: background-color 0.2s;
   font-size: 0.9rem;
-  color: inherit;
+  color: var(--foreground);
   text-align: left;
 }
 
 .help-menu-item:hover {
-  background-color: #007aff26;
+  background-color: var(--accent);
 }
 
 .help-menu-item:focus,
@@ -516,14 +699,40 @@ onMounted(async () => {
   box-shadow: none;
 }
 
-.help-menu-icon {
-  margin-right: 0.75rem;
-  font-size: 1rem;
-  color: var(--p-text-muted-color);
+.help-menu-icon-container {
+  position: relative;
   width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.help-menu-icon {
+  width: 16px;
+  height: 16px;
+  font-size: 16px;
+  color: var(--foreground);
   display: flex;
   justify-content: center;
+  align-items: center;
   flex-shrink: 0;
+}
+
+.help-menu-icon svg {
+  width: 16px;
+  height: 16px;
+  color: var(--foreground);
+}
+
+.menu-red-dot {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  width: 8px;
+  height: 8px;
+  background: var(--destructive);
+  border-radius: 50%;
+  border: 1.5px solid var(--background);
+  z-index: 1;
 }
 
 .menu-label {
@@ -534,16 +743,14 @@ onMounted(async () => {
   justify-content: space-between;
 }
 
-.whats-new-section {
-  padding: 0.5rem 0;
-}
-
 .section-description {
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--p-text-muted-color);
-  margin: 0 0 0.5rem 0;
-  padding: 0 1rem;
+  color: var(--muted-foreground);
+  font-family: var(--font-inter);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+  line-height: normal;
+  margin: 0;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -556,7 +763,7 @@ onMounted(async () => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -564,12 +771,22 @@ onMounted(async () => {
   font-size: 0.9rem;
   line-height: 1.2;
   font-weight: 500;
+  color: var(--foreground);
 }
 
 .release-date {
   height: 16px;
-  font-size: 0.75rem;
-  color: var(--p-text-muted-color);
+  color: var(--muted-foreground);
+  font-family: var(--font-inter);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
 }
 
 .release-date .hover-state {
@@ -586,35 +803,31 @@ onMounted(async () => {
   display: inline;
 }
 
-.update-button {
-  margin-left: 0.5rem;
-  font-size: 0.8rem;
-  padding: 0.25rem 0.75rem;
-  flex-shrink: 0;
-}
-
 /* Submenu Styles */
 .more-submenu {
   width: 210px;
-  padding: 0.5rem 0;
-  background: var(--p-content-background);
-  border-radius: 12px;
-  border: 1px solid var(--p-content-border-color);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  padding: 12px 8px;
+  background: var(--popover);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
   overflow: hidden;
   transition: opacity 0.15s ease-out;
 }
 
 .submenu-item {
-  padding: 0.75rem 1rem;
-  color: inherit;
+  padding: 8px;
+  height: 32px;
+  min-height: 24px;
+  border-radius: 4px;
+  color: var(--foreground);
   font-size: 0.9rem;
   font-weight: inherit;
   line-height: inherit;
 }
 
 .submenu-item:hover {
-  background-color: #007aff26;
+  background-color: var(--accent);
 }
 
 .submenu-item:focus,
@@ -625,8 +838,8 @@ onMounted(async () => {
 
 .submenu-divider {
   height: 1px;
-  background: #3e3e3e;
-  margin: 0.5rem 0;
+  background: var(--border);
+  margin: 4px 0;
 }
 
 /* Scrollbar Styling */
@@ -639,12 +852,12 @@ onMounted(async () => {
 }
 
 .help-center-menu::-webkit-scrollbar-thumb {
-  background: var(--p-content-border-color);
+  background: var(--border);
   border-radius: 3px;
 }
 
 .help-center-menu::-webkit-scrollbar-thumb:hover {
-  background: var(--p-text-muted-color);
+  background: var(--muted-foreground);
 }
 
 /* Reduced Motion */

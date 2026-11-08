@@ -15,6 +15,7 @@ To post inline comments, you will use the GitHub API via the `gh` command. Here'
    - Run: `gh pr view $PR_NUMBER --json commits --jq '.commits[-1].oid'` to get the latest commit SHA
 
 2. For each issue you find, post an inline comment using this exact command structure (as a single line):
+
    ```
    gh api --method POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/OWNER/REPO/pulls/$PR_NUMBER/comments -f body="YOUR_COMMENT_BODY" -f commit_id="COMMIT_SHA" -f path="FILE_PATH" -F line=LINE_NUMBER -f side="RIGHT"
    ```
@@ -22,13 +23,15 @@ To post inline comments, you will use the GitHub API via the `gh` command. Here'
 3. Format your comment body using actual newlines in the command. Use a heredoc or construct the body with proper line breaks:
    ```
    COMMENT_BODY="**[category] severity Priority**
+   ```
 
 **Issue**: Brief description of the problem
 **Context**: Why this matters  
 **Suggestion**: How to fix it"
-   ```
-   
-   Then use: `-f body="$COMMENT_BODY"`
+
+```
+
+Then use: `-f body="$COMMENT_BODY"`
 
 ## Phase 1: Environment Setup and PR Context
 
@@ -58,18 +61,20 @@ This is critical for better file inspection:
 1. Get PR metadata: `gh pr view $PR_NUMBER --json files,title,body,additions,deletions,baseRefName,headRefName > pr_info.json`
 2. Extract branch names from pr_info.json using jq
 3. Fetch and checkout the PR branch:
-   ```
-   git fetch origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER"
-   git checkout "pr-$PR_NUMBER"
-   ```
+```
+
+git fetch origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER"
+git checkout "pr-$PR_NUMBER"
+
+```
 
 ### Step 1.4: Get Changed Files and Diffs
 
 Use git locally for much faster analysis:
 
-1. Get list of changed files: `git diff --name-only "origin/$BASE_BRANCH" > changed_files.txt`
-2. Get the full diff: `git diff "origin/$BASE_BRANCH" > pr_diff.txt`
-3. Get detailed file changes with status: `git diff --name-status "origin/$BASE_BRANCH" > file_changes.txt`
+1. Get list of changed files: `git diff --name-only "$BASE_SHA" > changed_files.txt`
+2. Get the full diff: `git diff "$BASE_SHA" > pr_diff.txt`
+3. Get detailed file changes with status: `git diff --name-status "$BASE_SHA" > file_changes.txt`
 
 ### Step 1.5: Create Analysis Cache
 
@@ -100,9 +105,9 @@ Intelligently load only relevant knowledge:
 
 1. Use GitHub API to discover available knowledge folders: `https://api.github.com/repos/Comfy-Org/comfy-claude-prompt-library/contents/.claude/knowledge`
 2. For each knowledge folder, check if it's relevant by searching for the folder name in:
-   - Changed file paths
-   - PR title
-   - PR body
+- Changed file paths
+- PR title
+- PR body
 3. If relevant, download all files from that knowledge folder
 
 ### Step 2.4: Load Validation Rules
@@ -116,8 +121,8 @@ Load specific validation rules:
 ### Step 2.5: Load Local Guidelines
 
 Check for and load:
-1. `CLAUDE.md` in the repository root
-2. `.github/CLAUDE.md`
+1. `AGENTS.md` in the repository root
+2. `.github/AGENTS.md`
 
 ## Phase 3: Deep Analysis Instructions
 
@@ -141,12 +146,45 @@ Look for:
 - Proper abstraction levels
 - Interface design and API clarity
 - Leftover debug code (console.log, commented code, TODO comments)
+- Hand-declared/inlined server or API response types that duplicate a type already generated from an OpenAPI spec (`@comfyorg/ingest-types`, `@comfyorg/registry-types` under `packages/`) instead of importing it — these silently drift from the real contract and caused real bugs in PR #14771
+- Any comment added by the diff other than curt JSDoc on an exported API (including comments that explain why, cite a ticket, or justify a workaround) — run the `comment-sicko` skill (`.claude/skills/comment-sicko/SKILL.md`) as an additional pass and fold its findings into this same review instead of duplicating its diffing/classification logic
+
+#### 3.2.1 Audit suppressions before approving
+
+Search added lines for `eslint-disable`, `oxlint-disable`, `@ts-ignore`,
+`@ts-nocheck`, `@ts-expect-error`, `as any`, double assertions, and non-null
+assertions. Passing lint or typecheck is not evidence that these overrides are
+correct.
+
+For each override:
+
+1. Remove it in the local checkout. Run the linter named by the directive on the
+   changed file, or run the typecheck project that includes the file. `pnpm lint`
+   does not prove that ESLint checked a file outside `src/`. `pnpm typecheck`
+   does not cover `browser_tests/`, `scripts/`, or `tools/`.
+   Use the corresponding `typecheck:*` script for those paths. Record the exact
+   diagnostic, then restore the file.
+2. Trace the value to its runtime owner and authoritative type or schema.
+3. Search for an existing typed helper, generated type, guard, parser, fixture,
+   semantic query, or readiness signal that avoids the override.
+4. Check whether the code can fix the type, API, component semantics, or test
+   instead.
+
+Do not accept an override because its comment explains why the compliant path
+was inconvenient. Request changes for every `@ts-ignore` and `@ts-nocheck`, and
+for `@ts-expect-error` outside a test that intentionally verifies a compiler
+error. Request changes for file-wide or multi-rule lint disables, Testing
+Library disables that permit DOM traversal, casts that make malformed fixtures
+compile, and timing sleeps that hide missing readiness. Never accept `as any`.
+Accept a narrow lint exception or another specific assertion only when an
+external constraint is verified and no compliant fix is possible. State that
+evidence in the review.
 
 ### 3.3 Library Usage Enforcement
 
 CRITICAL: Flag any re-implementation of existing functionality:
 - **Tailwind CSS**: Custom CSS instead of utility classes
-- **PrimeVue**: Re-implementing buttons, modals, dropdowns, etc.
+- **Design system** (`src/components/ui`): Re-implementing buttons, modals, dropdowns, etc.
 - **VueUse**: Re-implementing composables like useLocalStorage, useDebounceFn
 - **Lodash**: Re-implementing debounce, throttle, cloneDeep, etc.
 - **Common components**: Not reusing from src/components/common/
@@ -193,12 +231,14 @@ Consider:
 For each issue found, create a concise inline comment with this structure:
 
 ```
+
 **[category] severity Priority**
 
 **Issue**: Brief description of the problem
 **Context**: Why this matters
 **Suggestion**: How to fix it
-```
+
+````
 
 Categories: architecture/security/performance/quality
 Severities: critical/high/medium/low
@@ -214,7 +254,7 @@ For EACH issue:
 
 ```bash
 gh api --method POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/OWNER/REPO/pulls/$PR_NUMBER/comments -f body="$COMMENT_BODY" -f commit_id="COMMIT_SHA" -f path="FILE_PATH" -F line=LINE_NUMBER -f side="RIGHT"
-```
+````
 
 CRITICAL: The entire command must be on one line. Use actual values, not placeholders.
 
@@ -223,12 +263,14 @@ CRITICAL: The entire command must be on one line. Use actual values, not placeho
 Here's an example of how to review a file with a security issue:
 
 1. First, get the repository info:
+
    ```bash
    gh repo view --json owner,name
    # Output: {"owner":{"login":"Comfy-Org"},"name":"ComfyUI_frontend"}
    ```
 
 2. Get the commit SHA:
+
    ```bash
    gh pr view $PR_NUMBER --json commits --jq '.commits[-1].oid'
    # Output: abc123def456
@@ -240,14 +282,17 @@ Here's an example of how to review a file with a security issue:
    ```bash
    # First, create the comment body with proper newlines
    COMMENT_BODY="**[security] critical Priority**
+   ```
 
 **Issue**: SQL injection vulnerability - user input directly concatenated into query
 **Context**: Allows attackers to execute arbitrary SQL commands
 **Suggestion**: Use parameterized queries or prepared statements"
-   
-   # Then post the comment (as a single line)
-   gh api --method POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/Comfy-Org/ComfyUI_frontend/pulls/$PR_NUMBER/comments -f body="$COMMENT_BODY" -f commit_id="abc123def456" -f path="src/db/queries.js" -F line=42 -f side="RIGHT"
-   ```
+
+# Then post the comment (as a single line)
+
+gh api --method POST -H "Accept: application/vnd.github+json" -H "X-GitHub-Api-Version: 2022-11-28" /repos/Comfy-Org/ComfyUI_frontend/pulls/$PR_NUMBER/comments -f body="$COMMENT_BODY" -f commit_id="abc123def456" -f path="src/db/queries.js" -F line=42 -f side="RIGHT"
+
+```
 
 Repeat this process for every issue you find in the PR.
 
@@ -282,9 +327,9 @@ Analyze the PR to determine its type:
 1. Extract PR title and body from pr_info.json
 2. Count files, additions, and deletions
 3. Determine PR type:
-   - Feature: Check for tests, documentation, backward compatibility
-   - Bug fix: Verify root cause addressed, includes regression tests
-   - Refactor: Ensure behavior preservation, tests still pass
+- Feature: Check for tests, documentation, backward compatibility
+- Bug fix: Verify root cause addressed, includes regression tests
+- Refactor: Ensure behavior preservation, tests still pass
 
 ## Phase 7: Generate Comprehensive Summary
 
@@ -292,16 +337,17 @@ After ALL inline comments are posted, create a summary:
 
 1. Calculate total issues by category and severity
 2. Use `gh pr review $PR_NUMBER --comment` to post a summary with:
-   - Review disclaimer
-   - Issue distribution (counts by severity)
-   - Category breakdown
-   - Key findings for each category
-   - Positive observations
-   - References to guidelines
-   - Next steps
+- Review disclaimer
+- Issue distribution (counts by severity)
+- Category breakdown
+- Key findings for each category
+- Positive observations
+- References to guidelines
+- Next steps
 
 Include in the summary:
 ```
+
 # Comprehensive PR Review
 
 This review is generated by Claude. It may not always be accurate, as with human reviewers. If you believe that any of the comments are invalid or incorrect, please state why for each. For others, please implement the changes in one way or another.
@@ -312,12 +358,14 @@ This review is generated by Claude. It may not always be accurate, as with human
 **Impact**: [X] additions, [Y] deletions across [Z] files
 
 ### Issue Distribution
+
 - Critical: [CRITICAL_COUNT]
 - High: [HIGH_COUNT]
 - Medium: [MEDIUM_COUNT]
 - Low: [LOW_COUNT]
 
 ### Category Breakdown
+
 - Architecture: [ARCHITECTURE_ISSUES] issues
 - Security: [SECURITY_ISSUES] issues
 - Performance: [PERFORMANCE_ISSUES] issues
@@ -326,33 +374,42 @@ This review is generated by Claude. It may not always be accurate, as with human
 ## Key Findings
 
 ### Architecture & Design
+
 [Detailed architectural analysis based on repository patterns]
 
 ### Security Considerations
+
 [Security implications beyond basic vulnerabilities]
 
 ### Performance Impact
+
 [Performance analysis including bundle size, render impact]
 
 ### Integration Points
+
 [How this affects other systems, extensions, etc.]
 
 ## Positive Observations
+
 [What was done well, good patterns followed]
 
 ## References
+
 - [Repository Architecture Guide](https://github.com/Comfy-Org/comfy-claude-prompt-library/blob/master/project-summaries-for-agents/ComfyUI_frontend/REPOSITORY_GUIDE.md)
 - [Frontend Standards](https://github.com/Comfy-Org/comfy-claude-prompt-library/blob/master/.claude/commands/validation/frontend-code-standards.md)
 - [Security Guidelines](https://github.com/Comfy-Org/comfy-claude-prompt-library/blob/master/.claude/commands/validation/security-audit.md)
 
 ## Next Steps
+
 1. Address critical issues before merge
 2. Consider architectural feedback for long-term maintainability
 3. Add tests for uncovered scenarios
 4. Update documentation if needed
 
 ---
-*This is a comprehensive automated review. For architectural decisions requiring human judgment, please request additional manual review.*
+
+_This is a comprehensive automated review. For architectural decisions requiring human judgment, please request additional manual review._
+
 ```
 
 ## Important Guidelines
@@ -376,3 +433,4 @@ This is a COMPREHENSIVE review, not a linting pass. Provide the same quality fee
 6. Phase 7: Post comprehensive summary ONLY after all inline comments
 
 Remember: Individual inline comments for each issue, then one final summary. Never batch issues into a single comment.
+```

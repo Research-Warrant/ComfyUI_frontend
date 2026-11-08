@@ -1,12 +1,25 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { UserDataFullInfo } from '@/schemas/apiSchema'
+import type { UserDataFullInfo } from '@comfyorg/api-client/types'
 import { api } from '@/scripts/api'
-import { TreeExplorerNode } from '@/types/treeExplorerTypes'
+import type { TreeExplorerNode } from '@/types/treeExplorerTypes'
 import { getPathDetails } from '@/utils/formatUtil'
 import { syncEntities } from '@/utils/syncUtil'
 import { buildTree } from '@/utils/treeUtil'
+
+/**
+ * Normalizes a timestamp value that may be either a number (milliseconds)
+ * or an ISO 8601 string (from Go's time.Time JSON serialization) into
+ * a consistent millisecond timestamp.
+ */
+function normalizeTimestamp(value: number | string): number {
+  if (typeof value === 'string') {
+    const ms = new Date(value).getTime()
+    return Number.isNaN(ms) ? Date.now() : ms
+  }
+  return value
+}
 
 /**
  * Represents a file in the user's data directory.
@@ -45,7 +58,6 @@ export class UserFile {
     public size: number
   ) {
     const details = getPathDetails(path)
-    this.path = path
     this.directory = details.directory
     this.fullFilename = details.fullFilename
     this.filename = details.filename
@@ -140,7 +152,7 @@ export class UserFile {
     // https://github.com/comfyanonymous/ComfyUI/pull/5446
     const updatedFile = (await resp.json()) as string | UserDataFullInfo
     if (typeof updatedFile === 'object') {
-      this.lastModified = updatedFile.modified
+      this.lastModified = normalizeTimestamp(updatedFile.modified)
       this.size = updatedFile.size
     }
     this.originalContent = this.content
@@ -175,14 +187,14 @@ export class UserFile {
     // https://github.com/comfyanonymous/ComfyUI/pull/5446
     const updatedFile = (await resp.json()) as string | UserDataFullInfo
     if (typeof updatedFile === 'object') {
-      this.lastModified = updatedFile.modified
+      this.lastModified = normalizeTimestamp(updatedFile.modified)
       this.size = updatedFile.size
     }
     return this
   }
 }
 
-export interface LoadedUserFile extends UserFile {
+interface LoadedUserFile extends UserFile {
   isLoaded: true
   originalContent: string
   content: string
@@ -199,11 +211,10 @@ export const useUserFileStore = defineStore('userFile', () => {
     userFiles.value.filter((file: UserFile) => file.isLoaded)
   )
 
-  const fileTree = computed<TreeExplorerNode<UserFile>>(
-    () =>
-      buildTree<UserFile>(userFiles.value, (userFile: UserFile) =>
-        userFile.path.split('/')
-      ) as TreeExplorerNode<UserFile>
+  const fileTree = computed<TreeExplorerNode<UserFile>>(() =>
+    buildTree<UserFile>(userFiles.value, (userFile: UserFile) =>
+      userFile.path.split('/')
+    )
   )
 
   /**

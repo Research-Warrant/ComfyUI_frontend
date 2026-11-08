@@ -1,0 +1,127 @@
+<template>
+  <Card
+    data-testid="cloud-notification-dialog"
+    class="relative grid h-full w-170 max-w-full grid-cols-5 shadow-lg"
+  >
+    <Button
+      size="unset"
+      variant="muted-textonly"
+      class="absolute top-2.5 right-2.5 z-10 size-8 rounded-full p-0 text-white hover:bg-white/20"
+      :aria-label="t('g.close')"
+      @click="onDismiss"
+    >
+      <i class="icon-[lucide--x]" />
+    </Button>
+
+    <div
+      class="relative col-span-2 flex items-center justify-center overflow-hidden rounded-sm"
+    >
+      <video
+        autoplay
+        loop
+        muted
+        playsinline
+        class="ml-[-20%] h-full min-w-5/4 object-cover"
+      >
+        <source
+          src="/assets/images/cloud-subscription.webm"
+          type="video/webm"
+        />
+      </video>
+    </div>
+
+    <div class="col-span-3 flex flex-col justify-between p-8">
+      <div>
+        <div class="flex flex-col gap-4 text-sm">
+          <DialogTitle class="m-0 text-sm">
+            {{ t('cloudNotification.title') }}
+          </DialogTitle>
+          <p class="m-0 text-muted-foreground">
+            {{ t('cloudNotification.message') }}
+          </p>
+        </div>
+
+        <div class="mt-6 flex flex-col items-start gap-0 self-stretch">
+          <div
+            v-for="n in [2, 3, 4]"
+            :key="n"
+            class="flex items-center gap-2 py-2"
+          >
+            <i class="icon-[lucide--check] size-3" />
+            <span class="text-sm">
+              {{ t(`cloudNotification.feature${n}Title`) }}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex flex-col gap-2 pt-8">
+        <Button
+          variant="primary"
+          size="lg"
+          class="w-full font-bold"
+          @click="onExplore"
+        >
+          {{ t('cloudNotification.exploreCloud') }}
+        </Button>
+        <Button variant="textonly" size="sm" class="w-full" @click="onDismiss">
+          {{ t('cloudNotification.continueLocally') }}
+        </Button>
+        <p class="m-0 text-center text-xs text-muted-foreground">
+          {{ t('cloudNotification.footer') }}
+        </p>
+      </div>
+    </div>
+  </Card>
+</template>
+
+<script setup lang="ts">
+import Card from '@comfyorg/design-system/card/Card'
+import { onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import Button from '@comfyorg/design-system/button/Button'
+import DialogTitle from '@comfyorg/design-system/dialog/DialogTitle'
+import { useTelemetry } from '@comfyorg/telemetry'
+import { useDialogStore } from '@/stores/dialogStore'
+
+const { t } = useI18n()
+
+onMounted(() => {
+  // Impression event — uses trackUiButtonClicked as no dedicated impression tracker exists
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'cloud_notification_modal_impression',
+    element_group: 'cloud_notification'
+  })
+})
+
+function onDismiss() {
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'cloud_notification_continue_locally_clicked',
+    element_group: 'cloud_notification'
+  })
+  useDialogStore().closeDialog()
+}
+
+function onExplore() {
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'cloud_notification_explore_cloud_clicked',
+    element_group: 'cloud_notification'
+  })
+
+  const params = new URLSearchParams({
+    utm_source: 'desktop',
+    utm_medium: 'onload-modal',
+    utm_campaign: 'local-to-cloud-conversion',
+    utm_id: 'desktop-onload-modal',
+    utm_source_platform: 'mac-desktop'
+  })
+
+  window.open(
+    `https://comfy.org/cloud/?${params}`,
+    '_blank',
+    'noopener,noreferrer'
+  )
+  useDialogStore().closeDialog()
+}
+</script>

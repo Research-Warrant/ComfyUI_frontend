@@ -1,7 +1,9 @@
 import { t } from '@/i18n'
+import { useToast } from '@/components/ui/toast/toastStore'
 import { api } from '@/scripts/api'
-import { app } from '@/scripts/app'
-import { useToastStore } from '@/stores/toastStore'
+import { useApp } from '@/scripts/appInstance'
+import { uploadTempFile } from '@/services/uploadTempFile'
+import { getErrorMessage } from '@comfyorg/shared-frontend-utils/errorUtil'
 
 class Load3dUtils {
   static async uploadTempImage(
@@ -15,27 +17,31 @@ class Load3dUtils {
       type: fileType === 'mp4' ? 'video/mp4' : 'image/png'
     })
 
-    const body = new FormData()
-    body.append('image', file)
-    body.append('subfolder', 'threed')
-    body.append('type', 'temp')
-
-    const resp = await api.fetchApi('/upload/image', {
-      method: 'POST',
-      body
-    })
-
-    if (resp.status !== 200) {
-      const err = `Error uploading temp file: ${resp.status} - ${resp.statusText}`
-      useToastStore().addAlert(err)
-      throw new Error(err)
-    }
-
-    return await resp.json()
+    const upload = await uploadTempFile(file, 'threed')
+    if (!upload.ok)
+      throw new Error(`Error uploading temp file: ${upload.reason}`)
+    return upload.file
   }
+
+  static readonly MAX_UPLOAD_SIZE_MB = 100
 
   static async uploadFile(file: File, subfolder: string) {
     let uploadPath
+
+    const fileSizeMB = file.size / 1024 / 1024
+    if (fileSizeMB > this.MAX_UPLOAD_SIZE_MB) {
+      const message = t('toastMessages.fileTooLarge', {
+        size: fileSizeMB.toFixed(1),
+        maxSize: this.MAX_UPLOAD_SIZE_MB
+      })
+      console.warn(
+        '[Load3D] uploadFile: file too large',
+        fileSizeMB.toFixed(2),
+        'MB'
+      )
+      useToast().warning(message)
+      return undefined
+    }
 
     try {
       const body = new FormData()
@@ -58,14 +64,18 @@ class Load3dUtils {
 
         uploadPath = path
       } else {
-        useToastStore().addAlert(resp.status + ' - ' + resp.statusText)
+        useToast().warning(
+          t('g.uploadFailed', {
+            reason: `${resp.status} - ${resp.statusText}`
+          })
+        )
       }
     } catch (error) {
-      console.error('Upload error:', error)
-      useToastStore().addAlert(
-        error instanceof Error
-          ? error.message
-          : t('toastMessages.fileUploadFailed')
+      console.error('[Load3D] uploadFile: exception', error)
+      useToast().warning(
+        t('g.uploadFailed', {
+          reason: getErrorMessage(error) ?? t('g.unknownError')
+        })
       )
     }
 
@@ -92,10 +102,21 @@ class Load3dUtils {
       'filename=' + encodeURIComponent(filename),
       'type=' + type,
       'subfolder=' + subfolder,
-      app.getRandParam().substring(1)
+      useApp().getRandParam().substring(1)
     ].join('&')
 
     return `/view?${params}`
+  }
+
+  static isSameResourceURL(a: string | null, b: string): boolean {
+    if (!a) return false
+    const withoutRand = (url: string) => {
+      const parsed = new URL(url, window.location.origin)
+      parsed.searchParams.delete('rand')
+      parsed.searchParams.sort()
+      return parsed.toString()
+    }
+    return withoutRand(a) === withoutRand(b)
   }
 
   static async uploadMultipleFiles(files: FileList, subfolder: string = '3d') {
@@ -104,6 +125,19 @@ class Load3dUtils {
     )
 
     await Promise.all(uploadPromises)
+  }
+
+  static mapSceneLightIntensityToHdri(
+    sceneIntensity: number,
+    sceneMin: number,
+    sceneMax: number
+  ): number {
+    const span = sceneMax - sceneMin
+    const t = span > 0 ? (sceneIntensity - sceneMin) / span : 0
+    const clampedT = Math.min(1, Math.max(0, t))
+    const mapped = clampedT * 5
+    const minHdri = 0.25
+    return Math.min(5, Math.max(minHdri, mapped))
   }
 }
 

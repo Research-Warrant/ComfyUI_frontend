@@ -1,17 +1,24 @@
-import type { LGraphNode } from '@/lib/litegraph/src/LGraphNode'
-import type { LLink } from '@/lib/litegraph/src/LLink'
-import type { Reroute } from '@/lib/litegraph/src/Reroute'
-import type { CustomEventTarget } from '@/lib/litegraph/src/infrastructure/CustomEventTarget'
-import type { LinkConnectorEventMap } from '@/lib/litegraph/src/infrastructure/LinkConnectorEventMap'
 import type {
-  INodeInputSlot,
-  LinkNetwork,
-  Point
-} from '@/lib/litegraph/src/interfaces'
-import type { SubgraphInput } from '@/lib/litegraph/src/subgraph/SubgraphInput'
-import type { SubgraphInputNode } from '@/lib/litegraph/src/subgraph/SubgraphInputNode'
+  LGraphNode,
+  LLink,
+  Reroute,
+  SubgraphInput,
+  SubgraphInputNode
+} from '@comfyorg/graph-model/entityRegistry'
+import { transferLinkPresentation } from '@/core/graph/transferLinkPresentation'
+import { useLinkPresentationStore } from '@/stores/linkPresentationStore'
+import { graphScopeOf } from '@comfyorg/graph-model/graphScopeId'
+import type { LinkPresentation } from '@comfyorg/graph-model/linkPresentation'
+
+import type { CustomEventTarget } from '@/lib/litegraph/src/infrastructure/CustomEventTarget'
+import type { LinkConnectorEventMap } from '@comfyorg/graph-model/LinkConnectorEventMap'
+import type { PointTuple as Point } from '@comfyorg/shared-frontend-utils/geometry'
+import type { SlotIndex } from '@comfyorg/graph-model/interfaces'
+import type { INodeInputSlot } from '@comfyorg/graph-model/slots'
+import type { LinkNetwork } from '@comfyorg/graph-model/linkNetwork'
+
 import type { NodeLike } from '@/lib/litegraph/src/types/NodeLike'
-import { LinkDirection } from '@/lib/litegraph/src/types/globalEnums'
+import { LinkDirection } from '@comfyorg/graph-model/globalEnums'
 
 import type { RenderLink } from './RenderLink'
 
@@ -19,10 +26,14 @@ import type { RenderLink } from './RenderLink'
 
 export class ToInputFromIoNodeLink implements RenderLink {
   readonly toType = 'input'
-  readonly fromSlotIndex: number
+  readonly fromSlotIndex: SlotIndex
   readonly fromPos: Point
   fromDirection: LinkDirection = LinkDirection.RIGHT
   readonly existingLink?: LLink
+  disconnectOnDrop: boolean
+  readonly disconnectOrigin?: Point
+  readonly isIoNodeLink = true
+  private readonly presentation: Readonly<LinkPresentation> | undefined
 
   constructor(
     readonly network: LinkNetwork,
@@ -42,6 +53,17 @@ export class ToInputFromIoNodeLink implements RenderLink {
     this.fromSlotIndex = outputIndex
     this.fromPos = fromReroute ? fromReroute.pos : fromSlot.pos
     this.existingLink = existingLink
+    this.disconnectOnDrop = true
+    this.presentation = existingLink
+      ? useLinkPresentationStore().getPresentation(
+          graphScopeOf(node.subgraph),
+          existingLink.id
+        )
+      : undefined
+
+    if (!existingLink) return
+    const toNode = network.getNodeById(existingLink.target_id)
+    this.disconnectOrigin = toNode?.getInputPos(existingLink.target_slot)
   }
 
   canConnectToInput(inputNode: NodeLike, input: INodeInputSlot): boolean {
@@ -58,12 +80,24 @@ export class ToInputFromIoNodeLink implements RenderLink {
     events: CustomEventTarget<LinkConnectorEventMap>
   ) {
     const { fromSlot, fromReroute, existingLink } = this
+    if (
+      existingLink &&
+      node.id === existingLink.target_id &&
+      node.inputs[existingLink.target_slot] === input
+    )
+      return
 
+    const scope = graphScopeOf(this.node.subgraph)
     const newLink = fromSlot.connect(input, node, fromReroute?.id)
 
     if (existingLink) {
       // Moving an existing link
+      transferLinkPresentation(scope, this.presentation, newLink?.id)
+      const { input, inputNode } = existingLink.resolve(this.network)
+      if (inputNode && input)
+        this.node._disconnectNodeInput(inputNode, input, existingLink)
       events.dispatch('input-moved', this)
+      fromSlot.events.dispatch('input-disconnected', { input: fromSlot })
     } else {
       // Creating a new link
       events.dispatch('link-created', newLink)
@@ -86,6 +120,8 @@ export class ToInputFromIoNodeLink implements RenderLink {
   ) {
     const { fromSlot, fromReroute } = this
 
+    const scope = graphScopeOf(this.node.subgraph)
+
     // Check before creating new link overwrites the value
     const floatingTerminus = fromReroute?.floating?.slotType === 'output'
 
@@ -93,6 +129,7 @@ export class ToInputFromIoNodeLink implements RenderLink {
     reroute.parentId = fromReroute?.id
 
     const newLink = fromSlot.connect(input, inputNode, link.parentId)
+    transferLinkPresentation(scope, this.presentation, newLink?.id)
 
     // Connecting from the final reroute of a floating reroute chain
     if (floatingTerminus) fromReroute.removeAllFloatingLinks()
@@ -101,7 +138,6 @@ export class ToInputFromIoNodeLink implements RenderLink {
     for (const reroute of originalReroutes) {
       if (reroute.id === fromReroute?.id) break
 
-      reroute.removeLink(link)
       if (reroute.totalLinks === 0) {
         if (link.isFloating) {
           // Cannot float from both sides - remove
@@ -137,7 +173,23 @@ export class ToInputFromIoNodeLink implements RenderLink {
   }
   disconnect(): boolean {
     if (!this.existingLink) return false
-    this.existingLink.disconnect(this.network, 'input')
+    const { input, inputNode, subgraphInput } = this.existingLink.resolve(
+      this.network
+    )
+    if (!inputNode || !input) return false
+    this.node._disconnectNodeInput(inputNode, input, this.existingLink)
+
+    if (subgraphInput)
+      subgraphInput.events.dispatch('input-disconnected', {
+        input: subgraphInput
+      })
+
     return true
   }
+}
+
+type RegisteredToInputFromIoNodeLink = ToInputFromIoNodeLink
+
+declare module '@comfyorg/graph-model/entityRegistry' {
+  interface ToInputFromIoNodeLink extends RegisteredToInputFromIoNodeLink {}
 }

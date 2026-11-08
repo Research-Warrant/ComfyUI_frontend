@@ -1,43 +1,60 @@
 <template>
-  <a
-    ref="wrapperRef"
-    v-tooltip.bottom="{
-      value: item.label,
-      showDelay: 512
-    }"
-    href="#"
-    class="cursor-pointer p-breadcrumb-item-link"
-    :class="{
-      'flex items-center gap-1': isActive,
-      'p-breadcrumb-item-link-menu-visible': menu?.overlayVisible,
-      'p-breadcrumb-item-link-icon-visible': isActive,
-      'active-breadcrumb-item': isActive
-    }"
-    @click="handleClick"
-  >
-    <span class="p-breadcrumb-item-label">{{ item.label }}</span>
-    <i v-if="isActive" class="pi pi-angle-down text-[10px]"></i>
-  </a>
+  <DefineTrigger>
+    <Button
+      variant="textonly"
+      size="unset"
+      :tooltip="tooltipText"
+      tooltip-side="bottom"
+      :data-testid="`subgraph-breadcrumb-item-${item.key}`"
+      :data-active="isActive ? '' : undefined"
+      draggable="false"
+      :class="
+        cn(
+          'flex h-8 appearance-none items-center justify-start gap-0 overflow-hidden border-none bg-transparent px-[calc(var(--breadcrumb-item-margin)+var(--breadcrumb-item-padding))] py-0 text-inherit select-none [font:inherit] hover:bg-transparent',
+          isRoot && 'pl-(--breadcrumb-item-padding)',
+          isActive && 'gap-1 text-foreground',
+          menuOpen && 'bg-accent text-foreground hover:bg-accent'
+        )
+      "
+      @click="handleClick"
+      @keydown="handleKeydown"
+    >
+      <i
+        v-if="hasMissingNodes && isRoot"
+        data-testid="subgraph-breadcrumb-missing-nodes-icon"
+        class="icon-[lucide--triangle-alert] text-warning"
+      />
+      <span ref="labelRef" class="max-w-72 truncate px-2">
+        {{ item.label }}
+      </span>
+      <Badge
+        v-if="item.isBlueprint"
+        data-testid="subgraph-breadcrumb-blueprint-tag"
+        severity="primary"
+      >
+        {{ t('breadcrumbsMenu.blueprint') }}
+      </Badge>
+      <i v-if="isActive" class="icon-[lucide--chevron-down] size-2.5"></i>
+    </Button>
+  </DefineTrigger>
   <Menu
     v-if="isActive"
-    ref="menu"
-    :model="menuItems"
-    :popup="true"
-    :pt="{
-      root: {
-        style: 'background-color: var(--comfy-menu-secondary-bg)'
-      },
-      itemLink: {
-        class: 'py-2'
-      }
-    }"
-  />
-  <InputText
+    :open="menuOpen"
+    :items="menuItems"
+    :data-testid="`subgraph-breadcrumb-menu-${item.key}`"
+    @update:open="menuOpen = Boolean($event && !isEditing)"
+    @close-auto-focus="onMenuCloseAutoFocus"
+  >
+    <template #trigger><ReuseTrigger /></template>
+  </Menu>
+  <ReuseTrigger v-else />
+  <Input
     v-if="isEditing"
     ref="itemInputRef"
     v-model="itemLabel"
-    class="fixed z-[10000] text-[.8rem] px-2 py-2"
-    @blur="inputBlur(true)"
+    data-testid="subgraph-breadcrumb-rename-input"
+    class="fixed z-overlay w-50 p-2 text-[.8rem]"
+    @blur="inputBlur(false)"
     @click.stop
     @keydown.enter="inputBlur(true)"
     @keydown.esc="inputBlur(false)"
@@ -45,37 +62,60 @@
 </template>
 
 <script setup lang="ts">
-import InputText from 'primevue/inputtext'
-import Menu, { MenuState } from 'primevue/menu'
-import type { MenuItem } from 'primevue/menuitem'
-import { computed, nextTick, ref } from 'vue'
+import { cn } from '@comfyorg/tailwind-utils'
+import { createReusableTemplate } from '@vueuse/core'
+import { computed, nextTick, ref, toValue } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import Badge from '@comfyorg/design-system/badge/Badge'
+import Button from '@comfyorg/design-system/button/Button'
+import Input from '@comfyorg/design-system/input/Input'
+import Menu from '@comfyorg/design-system/menu/Menu'
+import type { MenuItemAction } from '@comfyorg/design-system/lib/menu/types'
+import { useWorkflowActionsMenu } from '@/composables/useWorkflowActionsMenu'
+import { useWorkflowService } from '@/platform/workflow/core/services/workflowService'
+import {
+  ComfyWorkflow,
+  useWorkflowStore
+} from '@/platform/workflow/management/stores/workflowStore'
+import { app } from '@/scripts/app'
 import { useDialogService } from '@/services/dialogService'
-import { useWorkflowService } from '@/services/workflowService'
-import { useCommandStore } from '@/stores/commandStore'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import { useNodeDefStore } from '@/stores/nodeDefStore'
+import { isMissingWarningVisible } from '@/platform/settings/missingWarningVisibility'
 import { useSubgraphNavigationStore } from '@/stores/subgraphNavigationStore'
-import { ComfyWorkflow, useWorkflowStore } from '@/stores/workflowStore'
-import { appendJsonExt } from '@/utils/formatUtil'
+import { ensureWorkflowSuffix, getWorkflowSuffix } from '@/utils/formatUtil'
+import { graphHasMissingNodes } from '@/platform/customNodes/manager/utils/graphHasMissingNodes'
+
+export interface BreadcrumbItem extends MenuItemAction {
+  isBlueprint?: boolean
+  updateTitle?: (title: string) => void
+}
 
 interface Props {
-  item: MenuItem
+  item: BreadcrumbItem
   isActive?: boolean
 }
 
-const props = withDefaults(defineProps<Props>(), {
-  isActive: false
-})
+const { item, isActive } = defineProps<Props>()
+const [DefineTrigger, ReuseTrigger] = createReusableTemplate()
+
+const nodeDefStore = useNodeDefStore()
+const hasMissingNodes = computed(
+  () =>
+    isMissingWarningVisible('nodes') &&
+    graphHasMissingNodes(app.rootGraph, nodeDefStore.nodeDefsByName)
+)
 
 const { t } = useI18n()
-const menu = ref<InstanceType<typeof Menu> & MenuState>()
+const menuOpen = ref(false)
 const dialogService = useDialogService()
 const workflowStore = useWorkflowStore()
 const workflowService = useWorkflowService()
 const isEditing = ref(false)
 const itemLabel = ref<string>()
-const itemInputRef = ref<{ $el?: HTMLInputElement }>()
-const wrapperRef = ref<HTMLAnchorElement>()
+const itemInputRef = ref<InstanceType<typeof Input>>()
+const labelRef = ref<HTMLSpanElement>()
 
 const rename = async (
   newName: string | null | undefined,
@@ -83,15 +123,16 @@ const rename = async (
 ) => {
   if (newName && newName !== initialName) {
     // Synchronize the node titles with the new name
-    props.item.updateTitle?.(newName)
+    item.updateTitle?.(newName)
 
     if (workflowStore.activeSubgraph) {
       workflowStore.activeSubgraph.name = newName
     } else if (workflowStore.activeWorkflow) {
       try {
+        const suffix = getWorkflowSuffix(workflowStore.activeWorkflow.suffix)
         await workflowService.renameWorkflow(
           workflowStore.activeWorkflow,
-          ComfyWorkflow.basePath + appendJsonExt(newName)
+          ComfyWorkflow.basePath + ensureWorkflowSuffix(newName, suffix)
         )
       } catch (error) {
         console.error(error)
@@ -107,45 +148,43 @@ const rename = async (
   }
 }
 
-const menuItems = computed<MenuItem[]>(() => {
-  return [
-    {
-      label: t('g.rename'),
-      icon: 'pi pi-pencil',
-      command: startRename
-    },
-    {
-      label: t('breadcrumbsMenu.duplicate'),
-      icon: 'pi pi-copy',
-      command: async () => {
-        await workflowService.duplicateWorkflow(workflowStore.activeWorkflow!)
-      },
-      visible: props.item.key === 'root'
-    },
-    {
-      separator: true
-    },
-    {
-      label: t('breadcrumbsMenu.clearWorkflow'),
-      icon: 'pi pi-trash',
-      command: async () => {
-        await useCommandStore().execute('Comfy.ClearWorkflow')
-      }
-    },
-    {
-      separator: true,
-      visible: props.item.key === 'root'
-    },
-    {
-      label: t('breadcrumbsMenu.deleteWorkflow'),
-      icon: 'pi pi-times',
-      command: async () => {
-        await workflowService.deleteWorkflow(workflowStore.activeWorkflow!)
-      },
-      visible: props.item.key === 'root'
-    }
-  ]
+const isRoot = item.key === 'root'
+
+const tooltipText = computed(() => {
+  if (hasMissingNodes.value && isRoot) {
+    return t('breadcrumbsMenu.missingNodesWarning')
+  }
+  return toValue(item.label)
 })
+
+const startRename = async () => {
+  // Check if element is hidden (collapsed breadcrumb)
+  // When collapsed, root item is hidden via CSS display:none, so use rename command
+  if (isRoot && labelRef.value?.offsetParent === null) {
+    await useCommandStore().execute('Comfy.RenameWorkflow')
+    return
+  }
+
+  isEditing.value = true
+  itemLabel.value = item.label as string
+  void nextTick(() => {
+    itemInputRef.value?.focus()
+    itemInputRef.value?.select()
+  })
+}
+
+const { menuItems } = useWorkflowActionsMenu(startRename, { isRoot })
+
+function onMenuCloseAutoFocus(event: Event) {
+  if (isEditing.value) event.preventDefault()
+}
+
+function handleKeydown(event: KeyboardEvent) {
+  if (isActive || isEditing.value || !['Enter', ' '].includes(event.key)) return
+  event.preventDefault()
+  event.stopPropagation()
+  item.command?.({ item, originalEvent: event })
+}
 
 const handleClick = (event: MouseEvent) => {
   if (isEditing.value) {
@@ -153,58 +192,22 @@ const handleClick = (event: MouseEvent) => {
   }
 
   if (event.detail === 1) {
-    if (props.isActive) {
-      menu.value?.toggle(event)
-    } else {
-      props.item.command?.({ item: props.item, originalEvent: event })
+    if (!isActive) {
+      item.command?.({ item: item, originalEvent: event })
     }
-  } else if (props.isActive && event.detail === 2) {
-    menu.value?.hide()
+  } else if (isActive && event.detail === 2) {
+    menuOpen.value = false
     event.stopPropagation()
     event.preventDefault()
-    startRename()
+    void startRename()
   }
-}
-
-const startRename = () => {
-  isEditing.value = true
-  itemLabel.value = props.item.label as string
-  void nextTick(() => {
-    if (itemInputRef.value?.$el) {
-      itemInputRef.value.$el.focus()
-      itemInputRef.value.$el.select()
-      if (wrapperRef.value) {
-        itemInputRef.value.$el.style.width = `${Math.max(200, wrapperRef.value.offsetWidth)}px`
-      }
-    }
-  })
 }
 
 const inputBlur = async (doRename: boolean) => {
   if (doRename) {
-    await rename(itemLabel.value, props.item.label as string)
+    await rename(itemLabel.value, item.label as string)
   }
 
   isEditing.value = false
 }
 </script>
-
-<style scoped>
-.p-breadcrumb-item-link,
-.p-breadcrumb-item-icon {
-  @apply select-none;
-}
-
-.p-breadcrumb-item-link {
-  @apply overflow-hidden;
-  padding: var(--p-breadcrumb-item-padding);
-}
-
-.p-breadcrumb-item-label {
-  @apply whitespace-nowrap text-ellipsis overflow-hidden;
-}
-
-.active-breadcrumb-item {
-  color: var(--text-primary);
-}
-</style>

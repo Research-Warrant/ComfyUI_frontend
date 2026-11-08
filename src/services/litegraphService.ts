@@ -1,72 +1,434 @@
-import _ from 'es-toolkit/compat'
+import { pick, zip } from 'es-toolkit/compat'
 
+import { downloadFile, openFileInNewTab } from '@/base/common/downloadUtil'
+import { visibleCanvasViewport } from '@/composables/canvas/visibleCanvasViewport'
 import { useSelectedLiteGraphItems } from '@/composables/canvas/useSelectedLiteGraphItems'
+import { useSubgraphOperations } from '@/composables/graph/useSubgraphOperations'
 import { useNodeAnimatedImage } from '@/composables/node/useNodeAnimatedImage'
 import { useNodeCanvasImagePreview } from '@/composables/node/useNodeCanvasImagePreview'
 import { useNodeImage, useNodeVideo } from '@/composables/node/useNodeImage'
-import { st, t } from '@/i18n'
 import {
-  type IContextMenuValue,
-  LGraphBadge,
+  addWidgetPromotionOptions,
+  isPreviewPseudoWidget
+} from '@/core/graph/subgraph/promotionUtils'
+import { applyDynamicInputs } from '@/core/graph/widgets/dynamicWidgets'
+import { resolveNodeDefSlotText, st, t } from '@/i18n'
+import {
   LGraphCanvas,
   LGraphEventMode,
   LGraphNode,
   LiteGraph,
   RenderShape,
-  type Subgraph,
   SubgraphNode,
-  type Vector2,
-  createBounds
+  createBounds,
+  outputAsSerialisable
 } from '@/lib/litegraph/src/litegraph'
+import type {
+  CreateNodeOptions,
+  GraphAddOptions,
+  IContextMenuValue,
+  INodeInputSlot,
+  Subgraph
+} from '@/lib/litegraph/src/litegraph'
+import type { PointTuple as Point } from '@comfyorg/shared-frontend-utils/geometry'
+import { GET_CONFIG } from '@comfyorg/graph-model/widgets'
 import type {
   ExportedSubgraphInstance,
   ISerialisableNodeInput,
   ISerialisableNodeOutput,
   ISerialisedNode
-} from '@/lib/litegraph/src/types/serialisation'
-import type { NodeId } from '@/schemas/comfyWorkflowSchema'
-import { transformInputSpecV2ToV1 } from '@/schemas/nodeDef/migration'
+} from '@comfyorg/graph-model/serialisation'
+import type { IBaseWidget } from '@comfyorg/graph-model/widgets'
+import { toConcreteWidget } from '@/lib/litegraph/src/widgets/widgetMap'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { createPromotedMultilineWidget } from '@/renderer/extensions/vueNodes/widgets/utils/multilineTextarea'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { useDialogService } from '@/services/dialogService'
+import { resolveSubgraphPseudoWidgetCache } from '@/services/subgraphPseudoWidgetCache'
+import type { SubgraphPseudoWidgetCache } from '@/services/subgraphPseudoWidgetCache'
+import { transformInputSpecV2ToV1 } from '@comfyorg/object-info-parser/migration'
 import type {
   ComfyNodeDef as ComfyNodeDefV2,
   InputSpec,
   OutputSpec
-} from '@/schemas/nodeDef/nodeDefSchemaV2'
-import type { ComfyNodeDef as ComfyNodeDefV1 } from '@/schemas/nodeDefSchema'
-import { ComfyApp, app } from '@/scripts/app'
-import { isComponentWidget, isDOMWidget } from '@/scripts/domWidget'
-import { $el } from '@/scripts/ui'
-import { useDomWidgetStore } from '@/stores/domWidgetStore'
+} from '@comfyorg/object-info-parser/schemas/nodeDefSchemaV2'
+import type {
+  ComfyNodeDef as ComfyNodeDefV1,
+  InputSpec as InputSpecV1
+} from '@comfyorg/object-info-parser'
+import {
+  getInputSpecType,
+  zDynamicGroupInputSpec
+} from '@comfyorg/object-info-parser'
+import { useApp } from '@/scripts/appInstance'
+import { provideLitegraphService } from '@/core/graph/litegraphServiceAccess'
+import {
+  clipspace,
+  copyToClipspace,
+  pasteFromClipspace
+} from '@/scripts/clipspace'
+import { $el } from '@/scripts/ui/utils'
 import { useExecutionStore } from '@/stores/executionStore'
-import { useCanvasStore } from '@/stores/graphStore'
-import { useNodeOutputStore } from '@/stores/imagePreviewStore'
-import { ComfyNodeDefImpl } from '@/stores/nodeDefStore'
-import { useSettingStore } from '@/stores/settingStore'
-import { useToastStore } from '@/stores/toastStore'
+import { useNodeOutputStore } from '@/stores/nodeOutputStore'
+import { ComfyNodeDefImpl } from '@/core/graph/nodeDef/ComfyNodeDefImpl'
+import {
+  getPreviewExposureHostLocator,
+  usePreviewExposureStore
+} from '@/stores/previewExposureStore'
+import { useSubgraphStore } from '@/stores/subgraphStore'
+import { useFavoritedWidgetsStore } from '@/stores/workspace/favoritedWidgetsStore'
+import { useRightSidePanelStore } from '@/stores/workspace/rightSidePanelStore'
 import { useWidgetStore } from '@/stores/widgetStore'
-import { useWorkflowStore } from '@/stores/workflowStore'
+import { parseNodeId } from '@comfyorg/graph-model/nodeId'
+import type { SerializedNodeId } from '@comfyorg/graph-model/nodeId'
+import { isBlueprintType } from '@/utils/blueprintUtils'
+import { markCoreMediaMenuCallback } from '@/utils/coreMediaMenuActionUtils'
+import { getImageFileUrl } from '@/utils/hdrFormatUtil'
+import { getErrorMessage } from '@comfyorg/shared-frontend-utils/errorUtil'
+import type { WidgetId } from '@comfyorg/graph-model/widgetId'
 import { normalizeI18nKey } from '@/utils/formatUtil'
 import {
-  isImageNode,
+  isAnimatedOutput,
   isVideoNode,
+  isVideoOutput,
   migrateWidgetsValues
 } from '@/utils/litegraphUtil'
+import { getOrderedInputSpecs } from '@/workbench/utils/nodeDefOrderingUtil'
 
-import { useExtensionService } from './extensionService'
+import { useExtensionService } from '@/platform/extensions/services/extensionService'
 
-export const CONFIG = Symbol()
-export const GET_CONFIG = Symbol()
+async function reencodeAsPngBlob(
+  blob: Blob,
+  width: number,
+  height: number
+): Promise<Blob> {
+  const canvas = $el('canvas', { width, height })
+  const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('Could not get canvas context')
+
+  let image: ImageBitmap | HTMLImageElement
+  if (typeof window.createImageBitmap === 'undefined') {
+    const img = new Image()
+    const loaded = new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve()
+      img.onerror = () => reject(new Error('Image load failed'))
+    })
+    img.src = URL.createObjectURL(blob)
+    try {
+      await loaded
+    } finally {
+      URL.revokeObjectURL(img.src)
+    }
+    image = img
+  } else {
+    image = await createImageBitmap(blob)
+  }
+
+  try {
+    ctx.drawImage(image, 0, 0)
+  } finally {
+    if ('close' in image && typeof image.close === 'function') {
+      image.close()
+    }
+  }
+
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((result) => {
+      if (result) resolve(result)
+      else reject(new Error('PNG conversion failed'))
+    }, 'image/png')
+  })
+}
+
+export function getExtraOptionsForWidget(
+  node: LGraphNode,
+  widget: IBaseWidget
+) {
+  const options: IContextMenuValue[] = []
+  const input = node.inputs.find((inp) => inp.widget?.name === widget.name)
+
+  if (input) {
+    options.unshift({
+      content: `${t('contextMenu.RenameWidget')}: ${widget.label ?? widget.name}`,
+      callback: async () => {
+        const newLabel = await useDialogService().prompt({
+          title: t('g.rename'),
+          message: t('g.enterNewNamePrompt'),
+          defaultValue: widget.label,
+          placeholder: widget.name
+        })
+        if (newLabel === null) return
+        widget.label = newLabel || undefined
+        input.label = newLabel || undefined
+        widget.callback?.(widget.value)
+        useCanvasStore().canvas?.setDirty(true)
+      }
+    })
+  }
+
+  const favoritedWidgetsStore = useFavoritedWidgetsStore()
+  const isFavorited = favoritedWidgetsStore.isFavorited(node, widget.name)
+  options.unshift({
+    content: isFavorited
+      ? `${t('contextMenu.UnfavoriteWidget')}: ${widget.label ?? widget.name}`
+      : `${t('contextMenu.FavoriteWidget')}: ${widget.label ?? widget.name}`,
+    callback: () => {
+      favoritedWidgetsStore.toggleFavorite(node, widget.name)
+    }
+  })
+
+  if (node.graph && !node.graph.isRootGraph) {
+    addWidgetPromotionOptions(options, widget, node)
+  }
+  return options
+}
+
+function getMinSize(node: LGraphNode) {
+  node._initialMinSize ??= { width: 1, height: 1 }
+  return node._initialMinSize
+}
 
 /**
  * Service that augments litegraph with ComfyUI specific functionality.
  */
 export const useLitegraphService = () => {
   const extensionService = useExtensionService()
-  const toastStore = useToastStore()
+  const toast = useToast()
   const widgetStore = useWidgetStore()
   const canvasStore = useCanvasStore()
   const { toggleSelectedNodesMode } = useSelectedLiteGraphItems()
+  const subgraphPseudoWidgetCache = new WeakMap<
+    SubgraphNode,
+    SubgraphPseudoWidgetCache<LGraphNode, IBaseWidget>
+  >()
 
-  // TODO: Dedupe `registerNodeDef`; this should remain synchronous.
+  function invalidateSubgraphPseudoWidgetCache(node: SubgraphNode) {
+    subgraphPseudoWidgetCache.delete(node)
+  }
+
+  function getPseudoWidgetPreviewTargets(node: SubgraphNode): LGraphNode[] {
+    const hostLocator = getPreviewExposureHostLocator(node)
+    if (!hostLocator) return []
+    const promotions = usePreviewExposureStore().getExposuresAsPromotionShape(
+      node.rootGraph.id,
+      hostLocator
+    )
+    const resolved = resolveSubgraphPseudoWidgetCache({
+      cache: subgraphPseudoWidgetCache.get(node) ?? null,
+      promotions,
+      getNodeById: (nodeId) => node.subgraph.getNodeById(nodeId) ?? undefined,
+      isPreviewPseudoWidget
+    })
+    subgraphPseudoWidgetCache.set(node, resolved.cache)
+    return resolved.nodes
+  }
+
+  /**
+   * @internal The node definition name used to resolve the node's i18n text.
+   */
+  function nodeDefName(node: LGraphNode): string {
+    return node.constructor.nodeData?.name ?? ''
+  }
+  /**
+   * @internal Add input sockets to the node. (No widget)
+   */
+  function addInputSocket(node: LGraphNode, inputSpec: InputSpec) {
+    const inputName = inputSpec.name
+    const widgetConstructor = widgetStore.widgets.get(
+      inputSpec.widgetType ?? inputSpec.type
+    )
+    if (
+      (widgetConstructor && !inputSpec.forceInput) ||
+      applyDynamicInputs(node, inputSpec)
+    )
+      return
+
+    node.addInput(inputName, inputSpec.type, {
+      shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
+      localized_name: resolveNodeDefSlotText(
+        'name',
+        nodeDefName(node),
+        inputName,
+        inputSpec.display_name,
+        inputName
+      )
+    })
+  }
+  /**
+   * @internal Setup stroke styles for the node under various conditions.
+   */
+  function setupStrokeStyles(node: LGraphNode) {
+    node.strokeStyles['running'] = function (this: LGraphNode) {
+      const nodeLocatorId = useWorkflowStore().nodeIdToNodeLocatorId(this.id)
+      const state =
+        useExecutionStore().nodeLocationProgressStates[nodeLocatorId]?.state
+      if (state === 'running') {
+        return { color: '#0f0', lineWidth: 3 }
+      }
+    }
+    node.strokeStyles['dragOver'] = function (this: LGraphNode) {
+      if (useApp().dragOverNode?.id == this.id) {
+        return { color: 'dodgerblue' }
+      }
+    }
+    node.strokeStyles['executionError'] = function (this: LGraphNode) {
+      if (useApp().lastExecutionError?.node_id == this.id) {
+        return { color: LiteGraph.NODE_ERROR_COLOUR, lineWidth: 3 }
+      }
+    }
+  }
+
+  /**
+   * Utility function. Implemented for use with dynamic widgets
+   */
+  function addNodeInput(node: LGraphNode, inputSpec: InputSpec) {
+    addInputSocket(node, inputSpec)
+    addInputWidget(node, inputSpec, { dynamic: true })
+  }
+
+  function validateDynamicGroupWidgets(inputData: InputSpecV1, name: string) {
+    const { template } = zDynamicGroupInputSpec.parse(inputData)[1]
+    const fields = { ...template.required, ...template.optional }
+    for (const [field, spec] of Object.entries(fields)) {
+      if (
+        !widgetStore.widgets.has(spec[1]?.widgetType ?? getInputSpecType(spec))
+      )
+        throw new TypeError(
+          `DynamicGroup field '${name}.${field}' requires a registered widget`
+        )
+    }
+  }
+
+  /**
+   * @internal Add a widget to the node. For both primitive types and custom widgets
+   * (unless `socketless`), an input socket is also added.
+   */
+  function addInputWidget(
+    node: LGraphNode,
+    inputSpec: InputSpec,
+    { dynamic }: { dynamic?: boolean } = {}
+  ) {
+    const widgetInputSpec = { ...inputSpec }
+    if (inputSpec.widgetType) {
+      widgetInputSpec.type = inputSpec.widgetType
+    }
+    const inputName = inputSpec.name
+    const resolveLabel = (fallback: string) =>
+      resolveNodeDefSlotText(
+        'name',
+        nodeDefName(node),
+        inputName,
+        widgetInputSpec.display_name,
+        fallback
+      )
+    const widgetConstructor = widgetStore.widgets.get(widgetInputSpec.type)
+    if (!widgetConstructor || inputSpec.forceInput) return
+
+    const inputData = transformInputSpecV2ToV1(widgetInputSpec)
+    if (widgetInputSpec.type === 'COMFY_DYNAMICGROUP_V3')
+      validateDynamicGroupWidgets(inputData, inputName)
+    const widgetsBefore = new Set(node.widgets ?? [])
+    const result = widgetConstructor(node, inputName, inputData, useApp())
+    const wrappedResult = result && !('type' in result) ? result : undefined
+    const { minWidth = 1, minHeight = 1 } = wrappedResult ?? {}
+    const returnedWidget = result && 'type' in result ? result : result?.widget
+    if (returnedWidget) {
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- extension widgets may omit options at runtime
+      returnedWidget.options ??= {}
+    }
+    const widget =
+      (node.widgets ?? []).find(
+        (candidate) =>
+          candidate === returnedWidget ||
+          (!widgetsBefore.has(candidate) &&
+            (!returnedWidget || candidate.name === returnedWidget.name))
+      ) ?? (returnedWidget ? toConcreteWidget(returnedWidget, node) : undefined)
+    if (!widget) return
+
+    widget.label = resolveLabel(
+      widget.label ?? widgetInputSpec.display_name ?? inputName
+    )
+    Object.assign(widget.options, {
+      advanced: inputSpec.advanced
+    })
+    if (inputSpec.hidden !== undefined) widget.hidden = inputSpec.hidden
+    if (dynamic) widget.tooltip = inputSpec.tooltip
+
+    if (!widget.options.socketless) {
+      const inputSpecV1 = transformInputSpecV2ToV1(widgetInputSpec)
+      node.addInput(inputName, inputSpec.type, {
+        shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
+        localized_name: resolveLabel(inputName),
+        widget: { name: inputName, [GET_CONFIG]: () => inputSpecV1 }
+      })
+    }
+    const minSize = getMinSize(node)
+    minSize.width = Math.max(minSize.width, minWidth)
+    minSize.height = Math.max(minSize.height, minHeight)
+  }
+
+  /**
+   * @internal Add inputs to the node.
+   */
+  function addInputs(node: LGraphNode, inputs: Record<string, InputSpec>) {
+    const orderedInputSpecs = getOrderedInputSpecs(
+      node.constructor.nodeData ?? {},
+      inputs
+    )
+
+    for (const inputSpec of orderedInputSpecs) {
+      addInputSocket(node, inputSpec)
+      addInputWidget(node, inputSpec)
+    }
+  }
+
+  /**
+   * @internal Add outputs to the node.
+   */
+  function addOutputs(node: LGraphNode, outputs: OutputSpec[]) {
+    for (const output of outputs) {
+      const { name, is_list } = output
+      // TODO: Fix the typing at the node spec level
+      const type = output.type === 'COMFY_MATCHTYPE_V3' ? '*' : output.type
+      const shapeOptions = is_list ? { shape: LiteGraph.GRID_SHAPE } : {}
+      const typeKey = `dataTypes.${normalizeI18nKey(type)}`
+      const outputOptions = {
+        ...shapeOptions,
+        // If the output name is different from the output type, use the output name.
+        // e.g.
+        // - type ("INT"); name ("Positive") => translate name
+        // - type ("FLOAT"); name ("FLOAT") => translate type
+        localized_name:
+          type !== name
+            ? resolveNodeDefSlotText(
+                'name',
+                nodeDefName(node),
+                output.index,
+                name
+              )
+            : st(typeKey, name)
+      }
+      node.addOutput(name, type, outputOptions)
+    }
+  }
+
+  /**
+   * @internal Set the initial size of the node.
+   */
+  function setInitialSize(node: LGraphNode) {
+    const s = node.computeSize()
+    // Expand the width a little to fit widget values on screen.
+    const pad =
+      node.widgets?.length &&
+      !useSettingStore().get('LiteGraph.Node.DefaultPadding')
+    const minSize = getMinSize(node)
+    s[0] = Math.max(minSize.width, s[0] + (pad ? 60 : 0))
+    s[1] = Math.max(minSize.height, s[1])
+    node.setSize(s)
+  }
+
   function registerSubgraphNodeDef(
     nodeDefV1: ComfyNodeDefV1,
     subgraph: Subgraph,
@@ -76,218 +438,38 @@ export const useLitegraphService = () => {
       static comfyClass: string
       static override title: string
       static override category: string
-      static nodeData: ComfyNodeDefV1 & ComfyNodeDefV2
-
-      /**
-       * @internal The initial minimum size of the node.
-       */
-      #initialMinSize = { width: 1, height: 1 }
-      /**
-       * @internal The key for the node definition in the i18n file.
-       */
-      get #nodeKey(): string {
-        return `nodeDefs.${normalizeI18nKey(ComfyNode.nodeData.name)}`
-      }
+      static override nodeData: ComfyNodeDefV1 & ComfyNodeDefV2
 
       constructor() {
-        super(app.graph, subgraph, instanceData)
+        super(useApp().rootGraph, subgraph, instanceData)
 
-        // Set up event listener for promoted widget registration
-        subgraph.events.addEventListener('widget-promoted', (event) => {
-          const { widget } = event.detail
-          // Only handle DOM widgets
-          if (!isDOMWidget(widget) && !isComponentWidget(widget)) return
-
-          const domWidgetStore = useDomWidgetStore()
-          if (!domWidgetStore.widgetStates.has(widget.id)) {
-            domWidgetStore.registerWidget(widget)
-            // Set initial visibility based on whether the widget's node is in the current graph
-            const widgetState = domWidgetStore.widgetStates.get(widget.id)
-            if (widgetState) {
-              const currentGraph = canvasStore.getCanvas().graph
-              widgetState.visible =
-                currentGraph?.nodes.includes(widget.node) ?? false
-            }
-          }
+        subgraph.events.addEventListener('widget-promoted', () => {
+          invalidateSubgraphPseudoWidgetCache(this)
         })
 
-        // Set up event listener for promoted widget removal
-        subgraph.events.addEventListener('widget-demoted', (event) => {
-          const { widget } = event.detail
-          // Only handle DOM widgets
-          if (!isDOMWidget(widget) && !isComponentWidget(widget)) return
-
-          const domWidgetStore = useDomWidgetStore()
-          if (domWidgetStore.widgetStates.has(widget.id)) {
-            domWidgetStore.unregisterWidget(widget.id)
-          }
+        subgraph.events.addEventListener('widget-demoted', () => {
+          invalidateSubgraphPseudoWidgetCache(this)
         })
 
-        this.#setupStrokeStyles()
-        this.#addInputs(ComfyNode.nodeData.inputs)
-        this.#addOutputs(ComfyNode.nodeData.outputs)
-        this.#setInitialSize()
+        setupStrokeStyles(this)
+        addInputs(this, ComfyNode.nodeData.inputs)
+        addOutputs(this, ComfyNode.nodeData.outputs)
+        setInitialSize(this)
         this.serialize_widgets = true
         void extensionService.invokeExtensionsAsync('nodeCreated', this)
-        this.badges.push(
-          new LGraphBadge({
-            text: '',
-            iconOptions: {
-              unicode: '\ue96e',
-              fontFamily: 'PrimeIcons',
-              color: '#ffffff',
-              fontSize: 12
-            },
-            fgColor: '#ffffff',
-            bgColor: '#3b82f6'
-          })
-        )
       }
 
-      /**
-       * @internal Setup stroke styles for the node under various conditions.
-       */
-      #setupStrokeStyles() {
-        this.strokeStyles['running'] = function (this: LGraphNode) {
-          const nodeId = String(this.id)
-          const nodeLocatorId = useWorkflowStore().nodeIdToNodeLocatorId(nodeId)
-          const state =
-            useExecutionStore().nodeLocationProgressStates[nodeLocatorId]?.state
-          if (state === 'running') {
-            return { color: '#0f0' }
-          }
-        }
-        this.strokeStyles['nodeError'] = function (this: LGraphNode) {
-          if (app.lastNodeErrors?.[this.id]?.errors) {
-            return { color: 'red' }
-          }
-        }
-        this.strokeStyles['dragOver'] = function (this: LGraphNode) {
-          if (app.dragOverNode?.id == this.id) {
-            return { color: 'dodgerblue' }
-          }
-        }
-        this.strokeStyles['executionError'] = function (this: LGraphNode) {
-          if (app.lastExecutionError?.node_id == this.id) {
-            return { color: '#f0f', lineWidth: 2 }
-          }
-        }
-      }
-
-      /**
-       * @internal Add input sockets to the node. (No widget)
-       */
-      #addInputSocket(inputSpec: InputSpec) {
-        const inputName = inputSpec.name
-        const nameKey = `${this.#nodeKey}.inputs.${normalizeI18nKey(inputName)}.name`
-        const widgetConstructor = widgetStore.widgets.get(
-          inputSpec.widgetType ?? inputSpec.type
-        )
-        if (widgetConstructor && !inputSpec.forceInput) return
-
-        this.addInput(inputName, inputSpec.type, {
-          shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
-          localized_name: st(nameKey, inputName)
+      protected override createPromotedHostWidget(
+        input: INodeInputSlot,
+        widgetId: WidgetId,
+        sourceWidget: Readonly<IBaseWidget>
+      ): IBaseWidget | undefined {
+        return createPromotedMultilineWidget({
+          subgraphNode: this,
+          input,
+          widgetId,
+          sourceWidget
         })
-      }
-
-      /**
-       * @internal Add a widget to the node. For both primitive types and custom widgets
-       * (unless `socketless`), an input socket is also added.
-       */
-      #addInputWidget(inputSpec: InputSpec) {
-        const widgetInputSpec = { ...inputSpec }
-        if (inputSpec.widgetType) {
-          widgetInputSpec.type = inputSpec.widgetType
-        }
-        const inputName = inputSpec.name
-        const nameKey = `${this.#nodeKey}.inputs.${normalizeI18nKey(inputName)}.name`
-        const widgetConstructor = widgetStore.widgets.get(widgetInputSpec.type)
-        if (!widgetConstructor || inputSpec.forceInput) return
-
-        const {
-          widget,
-          minWidth = 1,
-          minHeight = 1
-        } = widgetConstructor(
-          this,
-          inputName,
-          transformInputSpecV2ToV1(widgetInputSpec),
-          app
-        ) ?? {}
-
-        if (widget) {
-          widget.label = st(nameKey, widget.label ?? inputName)
-          widget.options ??= {}
-          Object.assign(widget.options, {
-            advanced: inputSpec.advanced,
-            hidden: inputSpec.hidden
-          })
-        }
-
-        if (!widget?.options?.socketless) {
-          const inputSpecV1 = transformInputSpecV2ToV1(widgetInputSpec)
-          this.addInput(inputName, inputSpec.type, {
-            shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
-            localized_name: st(nameKey, inputName),
-            widget: { name: inputName, [GET_CONFIG]: () => inputSpecV1 }
-          })
-        }
-
-        this.#initialMinSize.width = Math.max(
-          this.#initialMinSize.width,
-          minWidth
-        )
-        this.#initialMinSize.height = Math.max(
-          this.#initialMinSize.height,
-          minHeight
-        )
-      }
-
-      /**
-       * @internal Add inputs to the node.
-       */
-      #addInputs(inputs: Record<string, InputSpec>) {
-        for (const inputSpec of Object.values(inputs))
-          this.#addInputSocket(inputSpec)
-        for (const inputSpec of Object.values(inputs))
-          this.#addInputWidget(inputSpec)
-      }
-
-      /**
-       * @internal Add outputs to the node.
-       */
-      #addOutputs(outputs: OutputSpec[]) {
-        for (const output of outputs) {
-          const { name, type, is_list } = output
-          const shapeOptions = is_list ? { shape: LiteGraph.GRID_SHAPE } : {}
-          const nameKey = `${this.#nodeKey}.outputs.${output.index}.name`
-          const typeKey = `dataTypes.${normalizeI18nKey(type)}`
-          const outputOptions = {
-            ...shapeOptions,
-            // If the output name is different from the output type, use the output name.
-            // e.g.
-            // - type ("INT"); name ("Positive") => translate name
-            // - type ("FLOAT"); name ("FLOAT") => translate type
-            localized_name:
-              type !== name ? st(nameKey, name) : st(typeKey, name)
-          }
-          this.addOutput(name, type, outputOptions)
-        }
-      }
-
-      /**
-       * @internal Set the initial size of the node.
-       */
-      #setInitialSize() {
-        const s = this.computeSize()
-        // Expand the width a little to fit widget values on screen.
-        const pad =
-          this.widgets?.length &&
-          !useSettingStore().get('LiteGraph.Node.DefaultPadding')
-        s[0] = Math.max(this.#initialMinSize.width, s[0] + (pad ? 60 : 0))
-        s[1] = Math.max(this.#initialMinSize.height, s[1])
-        this.setSize(s)
       }
 
       /**
@@ -313,7 +495,7 @@ export const useLitegraphService = () => {
                 ...inputData,
                 // Whether the input has associated widget follows the
                 // original node definition.
-                ..._.pick(input, RESERVED_KEYS.concat('widget'))
+                ...pick(input, RESERVED_KEYS.concat('widget'))
               }
             : input
         })
@@ -325,8 +507,8 @@ export const useLitegraphService = () => {
 
         // Note: output name is not unique, so we cannot lookup output by name.
         // Use index instead.
-        data.outputs = _.zip(this.outputs, data.outputs).map(
-          ([output, outputData]) => {
+        data.outputs = zip(this.outputs, data.outputs ?? []).map(
+          ([output, outputData], index) => {
             // If there are extra outputs in the serialised node, use them directly.
             // There are currently custom nodes that dynamically add outputs via
             // js logic.
@@ -335,15 +517,15 @@ export const useLitegraphService = () => {
             return outputData
               ? {
                   ...outputData,
-                  ..._.pick(output, RESERVED_KEYS)
+                  ...pick(output, RESERVED_KEYS)
                 }
-              : output
+              : outputAsSerialisable(output, this, index)
           }
         )
 
         data.widgets_values = migrateWidgetsValues(
           ComfyNode.nodeData.inputs,
-          this.widgets ?? [],
+          this.widgets,
           data.widgets_values ?? []
         )
 
@@ -374,25 +556,14 @@ export const useLitegraphService = () => {
       static comfyClass: string
       static override title: string
       static override category: string
-      static nodeData: ComfyNodeDefV1 & ComfyNodeDefV2
-
-      /**
-       * @internal The initial minimum size of the node.
-       */
-      #initialMinSize = { width: 1, height: 1 }
-      /**
-       * @internal The key for the node definition in the i18n file.
-       */
-      get #nodeKey(): string {
-        return `nodeDefs.${normalizeI18nKey(ComfyNode.nodeData.name)}`
-      }
+      static override nodeData: ComfyNodeDefV1 & ComfyNodeDefV2
 
       constructor(title: string) {
         super(title)
-        this.#setupStrokeStyles()
-        this.#addInputs(ComfyNode.nodeData.inputs)
-        this.#addOutputs(ComfyNode.nodeData.outputs)
-        this.#setInitialSize()
+        setupStrokeStyles(this)
+        addInputs(this, ComfyNode.nodeData.inputs)
+        addOutputs(this, ComfyNode.nodeData.outputs)
+        setInitialSize(this)
         this.serialize_widgets = true
 
         // Mark API Nodes yellow by default to distinguish with other nodes.
@@ -402,152 +573,6 @@ export const useLitegraphService = () => {
         }
 
         void extensionService.invokeExtensionsAsync('nodeCreated', this)
-      }
-
-      /**
-       * @internal Setup stroke styles for the node under various conditions.
-       */
-      #setupStrokeStyles() {
-        this.strokeStyles['running'] = function (this: LGraphNode) {
-          const nodeId = String(this.id)
-          const nodeLocatorId = useWorkflowStore().nodeIdToNodeLocatorId(nodeId)
-          const state =
-            useExecutionStore().nodeLocationProgressStates[nodeLocatorId]?.state
-          if (state === 'running') {
-            return { color: '#0f0' }
-          }
-        }
-        this.strokeStyles['nodeError'] = function (this: LGraphNode) {
-          if (app.lastNodeErrors?.[this.id]?.errors) {
-            return { color: 'red' }
-          }
-        }
-        this.strokeStyles['dragOver'] = function (this: LGraphNode) {
-          if (app.dragOverNode?.id == this.id) {
-            return { color: 'dodgerblue' }
-          }
-        }
-        this.strokeStyles['executionError'] = function (this: LGraphNode) {
-          if (app.lastExecutionError?.node_id == this.id) {
-            return { color: '#f0f', lineWidth: 2 }
-          }
-        }
-      }
-
-      /**
-       * @internal Add input sockets to the node. (No widget)
-       */
-      #addInputSocket(inputSpec: InputSpec) {
-        const inputName = inputSpec.name
-        const nameKey = `${this.#nodeKey}.inputs.${normalizeI18nKey(inputName)}.name`
-        const widgetConstructor = widgetStore.widgets.get(
-          inputSpec.widgetType ?? inputSpec.type
-        )
-        if (widgetConstructor && !inputSpec.forceInput) return
-
-        this.addInput(inputName, inputSpec.type, {
-          shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
-          localized_name: st(nameKey, inputName)
-        })
-      }
-
-      /**
-       * @internal Add a widget to the node. For both primitive types and custom widgets
-       * (unless `socketless`), an input socket is also added.
-       */
-      #addInputWidget(inputSpec: InputSpec) {
-        const widgetInputSpec = { ...inputSpec }
-        if (inputSpec.widgetType) {
-          widgetInputSpec.type = inputSpec.widgetType
-        }
-        const inputName = inputSpec.name
-        const nameKey = `${this.#nodeKey}.inputs.${normalizeI18nKey(inputName)}.name`
-        const widgetConstructor = widgetStore.widgets.get(widgetInputSpec.type)
-        if (!widgetConstructor || inputSpec.forceInput) return
-
-        const {
-          widget,
-          minWidth = 1,
-          minHeight = 1
-        } = widgetConstructor(
-          this,
-          inputName,
-          transformInputSpecV2ToV1(widgetInputSpec),
-          app
-        ) ?? {}
-
-        if (widget) {
-          widget.label = st(nameKey, widget.label ?? inputName)
-          widget.options ??= {}
-          Object.assign(widget.options, {
-            advanced: inputSpec.advanced,
-            hidden: inputSpec.hidden
-          })
-        }
-
-        if (!widget?.options?.socketless) {
-          const inputSpecV1 = transformInputSpecV2ToV1(widgetInputSpec)
-          this.addInput(inputName, inputSpec.type, {
-            shape: inputSpec.isOptional ? RenderShape.HollowCircle : undefined,
-            localized_name: st(nameKey, inputName),
-            widget: { name: inputName, [GET_CONFIG]: () => inputSpecV1 }
-          })
-        }
-
-        this.#initialMinSize.width = Math.max(
-          this.#initialMinSize.width,
-          minWidth
-        )
-        this.#initialMinSize.height = Math.max(
-          this.#initialMinSize.height,
-          minHeight
-        )
-      }
-
-      /**
-       * @internal Add inputs to the node.
-       */
-      #addInputs(inputs: Record<string, InputSpec>) {
-        for (const inputSpec of Object.values(inputs))
-          this.#addInputSocket(inputSpec)
-        for (const inputSpec of Object.values(inputs))
-          this.#addInputWidget(inputSpec)
-      }
-
-      /**
-       * @internal Add outputs to the node.
-       */
-      #addOutputs(outputs: OutputSpec[]) {
-        for (const output of outputs) {
-          const { name, type, is_list } = output
-          const shapeOptions = is_list ? { shape: LiteGraph.GRID_SHAPE } : {}
-          const nameKey = `${this.#nodeKey}.outputs.${output.index}.name`
-          const typeKey = `dataTypes.${normalizeI18nKey(type)}`
-          const outputOptions = {
-            ...shapeOptions,
-            // If the output name is different from the output type, use the output name.
-            // e.g.
-            // - type ("INT"); name ("Positive") => translate name
-            // - type ("FLOAT"); name ("FLOAT") => translate type
-            localized_name:
-              type !== name ? st(nameKey, name) : st(typeKey, name)
-          }
-          this.addOutput(name, type, outputOptions)
-        }
-      }
-
-      /**
-       * @internal Set the initial size of the node.
-       */
-      #setInitialSize() {
-        const s = this.computeSize()
-        // Expand the width a little to fit widget values on screen.
-        const pad =
-          this.widgets?.length &&
-          !useSettingStore().get('LiteGraph.Node.DefaultPadding')
-        s[0] = Math.max(this.#initialMinSize.width, s[0] + (pad ? 60 : 0))
-        s[1] = Math.max(this.#initialMinSize.height, s[1])
-        this.setSize(s)
       }
 
       /**
@@ -573,7 +598,7 @@ export const useLitegraphService = () => {
                 ...inputData,
                 // Whether the input has associated widget follows the
                 // original node definition.
-                ..._.pick(input, RESERVED_KEYS.concat('widget'))
+                ...pick(input, RESERVED_KEYS.concat('widget'))
               }
             : input
         })
@@ -585,8 +610,8 @@ export const useLitegraphService = () => {
 
         // Note: output name is not unique, so we cannot lookup output by name.
         // Use index instead.
-        data.outputs = _.zip(this.outputs, data.outputs).map(
-          ([output, outputData]) => {
+        data.outputs = zip(this.outputs, data.outputs ?? []).map(
+          ([output, outputData], index) => {
             // If there are extra outputs in the serialised node, use them directly.
             // There are currently custom nodes that dynamically add outputs via
             // js logic.
@@ -595,9 +620,9 @@ export const useLitegraphService = () => {
             return outputData
               ? {
                   ...outputData,
-                  ..._.pick(output, RESERVED_KEYS)
+                  ...pick(output, RESERVED_KEYS)
                 }
-              : output
+              : outputAsSerialisable(output, this, index)
           }
         )
 
@@ -631,6 +656,13 @@ export const useLitegraphService = () => {
     // because `registerNodeType` will overwrite the assignments.
     node.category = nodeDef.category
     node.title = nodeDef.display_name || nodeDef.name
+
+    // Set skip_list for dev-only nodes based on current DevMode setting
+    // This ensures nodes registered after initial load respect the current setting
+    if (nodeDef.dev_only) {
+      const settingStore = useSettingStore()
+      node.skip_list = !settingStore.get('Comfy.DevMode')
+    }
   }
 
   /**
@@ -644,118 +676,69 @@ export const useLitegraphService = () => {
       return [
         {
           content: 'Copy Image',
-          // @ts-expect-error: async callback is not accepted by litegraph
-          callback: async () => {
+          callback: markCoreMediaMenuCallback(async () => {
             const url = new URL(img.src)
             url.searchParams.delete('preview')
-
-            // @ts-expect-error fixme ts strict error
-            const writeImage = async (blob) => {
-              await navigator.clipboard.write([
-                new ClipboardItem({
-                  [blob.type]: blob
-                })
-              ])
-            }
 
             try {
               const data = await fetch(url)
               const blob = await data.blob()
               try {
-                await writeImage(blob)
+                await navigator.clipboard.write([
+                  new ClipboardItem({ [blob.type]: blob })
+                ])
               } catch (error) {
                 // Chrome seems to only support PNG on write, convert and try again
                 if (blob.type !== 'image/png') {
-                  const canvas = $el('canvas', {
-                    width: img.naturalWidth,
-                    height: img.naturalHeight
-                  }) as HTMLCanvasElement
-                  const ctx = canvas.getContext('2d')
-                  // @ts-expect-error fixme ts strict error
-                  let image
-                  if (typeof window.createImageBitmap === 'undefined') {
-                    image = new Image()
-                    const p = new Promise((resolve, reject) => {
-                      // @ts-expect-error fixme ts strict error
-                      image.onload = resolve
-                      // @ts-expect-error fixme ts strict error
-                      image.onerror = reject
-                    }).finally(() => {
-                      // @ts-expect-error fixme ts strict error
-                      URL.revokeObjectURL(image.src)
-                    })
-                    image.src = URL.createObjectURL(blob)
-                    await p
-                  } else {
-                    image = await createImageBitmap(blob)
-                  }
-                  try {
-                    // @ts-expect-error fixme ts strict error
-                    ctx.drawImage(image, 0, 0)
-                    canvas.toBlob(writeImage, 'image/png')
-                  } finally {
-                    // @ts-expect-error fixme ts strict error
-                    if (typeof image.close === 'function') {
-                      // @ts-expect-error fixme ts strict error
-                      image.close()
-                    }
-                  }
-
+                  const pngBlob = await reencodeAsPngBlob(
+                    blob,
+                    img.naturalWidth,
+                    img.naturalHeight
+                  )
+                  await navigator.clipboard.write([
+                    new ClipboardItem({ 'image/png': pngBlob })
+                  ])
                   return
                 }
                 throw error
               }
             } catch (error) {
-              toastStore.addAlert(
+              toast.warning(
                 t('toastMessages.errorCopyImage', {
-                  // @ts-expect-error fixme ts strict error
-                  error: error.message ?? error
+                  error: getErrorMessage(error) ?? t('g.unknownError')
                 })
               )
             }
-          }
+          }, 'preview')
         }
       ]
     }
 
-    node.prototype.getExtraMenuOptions = function (_, options) {
+    node.prototype.getExtraMenuOptions = function (canvas, options) {
       if (this.imgs) {
-        // If this node has images then we add an open in new tab item
         let img
         if (this.imageIndex != null) {
-          // An image is selected so select that
           img = this.imgs[this.imageIndex]
         } else if (this.overIndex != null) {
-          // No image is selected but one is hovered
           img = this.imgs[this.overIndex]
         }
         if (img) {
           options.unshift(
             {
               content: 'Open Image',
-              callback: () => {
-                const url = new URL(img.src)
-                url.searchParams.delete('preview')
-                window.open(url, '_blank')
-              }
+              callback: markCoreMediaMenuCallback(() => {
+                const url = getImageFileUrl(img)
+                void openFileInNewTab(url.toString())
+              }, 'preview')
             },
             ...getCopyImageOption(img),
             {
               content: 'Save Image',
-              callback: () => {
-                const a = document.createElement('a')
-                const url = new URL(img.src)
-                url.searchParams.delete('preview')
-                a.href = url.toString()
-                a.setAttribute(
-                  'download',
-                  // @ts-expect-error fixme ts strict error
-                  new URLSearchParams(url.search).get('filename')
-                )
-                document.body.append(a)
-                a.click()
-                requestAnimationFrame(() => a.remove())
-              }
+              callback: markCoreMediaMenuCallback(() => {
+                const url = getImageFileUrl(img)
+                const filename = new URLSearchParams(url.search).get('filename')
+                downloadFile(url.toString(), filename ?? undefined)
+              }, 'preview')
             }
           )
         }
@@ -765,52 +748,96 @@ export const useLitegraphService = () => {
         content: 'Bypass',
         callback: () => {
           toggleSelectedNodesMode(LGraphEventMode.BYPASS)
-          app.canvas.setDirty(true, true)
+          canvas.setDirty(true, true)
         }
       })
 
-      // prevent conflict of clipspace content
-      if (!ComfyApp.clipspace_return_node) {
+      if (!clipspace.returnNode) {
         options.push({
           content: 'Copy (Clipspace)',
           callback: () => {
-            ComfyApp.copyToClipspace(this)
+            copyToClipspace(this)
           }
         })
 
-        if (ComfyApp.clipspace != null) {
+        if (clipspace.current != null) {
           options.push({
             content: 'Paste (Clipspace)',
-            callback: () => {
-              ComfyApp.pasteFromClipspace(this)
-            }
-          })
-        }
-
-        if (isImageNode(this)) {
-          options.push({
-            content: 'Open in MaskEditor | Image Canvas',
-            callback: () => {
-              ComfyApp.copyToClipspace(this)
-              // @ts-expect-error fixme ts strict error
-              ComfyApp.clipspace_return_node = this
-              // @ts-expect-error fixme ts strict error
-              ComfyApp.open_maskeditor()
-            }
+            callback: markCoreMediaMenuCallback(() => {
+              pasteFromClipspace(this)
+            }, 'input')
           })
         }
       }
       if (this instanceof SubgraphNode) {
-        options.unshift({
-          content: 'Unpack Subgraph',
-          callback: () => {
-            useNodeOutputStore().revokeSubgraphPreviews(this)
-            this.graph.unpackSubgraph(this)
+        options.unshift(
+          {
+            content: 'Edit Subgraph Widgets',
+            callback: () => {
+              useRightSidePanelStore().openPanel('subgraph')
+            }
+          },
+          {
+            content: 'Unpack Subgraph',
+            callback: () => {
+              const { unpackSubgraph } = useSubgraphOperations()
+              unpackSubgraph()
+            }
           }
-        })
+        )
       }
-
+      const [x, y] = canvas.graph_mouse
+      const overWidget = this.getWidgetOnPos(x, y, true)
+      if (overWidget)
+        options.unshift(...getExtraOptionsForWidget(this, overWidget))
       return []
+    }
+  }
+  function updatePreviews(node: LGraphNode, callback?: () => void) {
+    try {
+      unsafeUpdatePreviews.call(node, callback)
+    } catch (error) {
+      console.error('Error drawing node background', error)
+    }
+  }
+  function unsafeUpdatePreviews(this: LGraphNode, callback?: () => void) {
+    if (this.flags.collapsed) return
+
+    const nodeOutputStore = useNodeOutputStore()
+    const { showAnimatedPreview, removeAnimatedPreview } =
+      useNodeAnimatedImage()
+    const { showCanvasImagePreview, removeCanvasImagePreview } =
+      useNodeCanvasImagePreview()
+
+    const output = nodeOutputStore.getNodeOutputs(this)
+    const preview = nodeOutputStore.getNodePreviews(this)
+
+    const isNewOutput = output && this.images !== output.images
+    const isNewPreview = preview && this.preview !== preview
+
+    if (isNewPreview) this.preview = preview
+    if (isNewOutput) this.images = output.images
+
+    if (isNewOutput || isNewPreview) {
+      this.animatedImages = isAnimatedOutput(output)
+
+      const isVideo = isVideoOutput(output) || isVideoNode(this)
+      if (isVideo) {
+        useNodeVideo(this, callback).showPreview()
+      } else {
+        useNodeImage(this, callback).showPreview()
+      }
+    }
+
+    // Nothing to do
+    if (!this.imgs?.length) return
+
+    if (this.animatedImages) {
+      removeCanvasImagePreview(this)
+      showAnimatedPreview(this)
+    } else {
+      removeAnimatedPreview(this)
+      showCanvasImagePreview(this)
     }
   }
 
@@ -828,61 +855,16 @@ export const useLitegraphService = () => {
         'node.setSizeForImage is deprecated. Now it has no effect. Please remove the call to it.'
       )
     }
-
-    function unsafeDrawBackground(this: LGraphNode) {
-      if (this.flags.collapsed) return
-
-      const nodeOutputStore = useNodeOutputStore()
-      const { showAnimatedPreview, removeAnimatedPreview } =
-        useNodeAnimatedImage()
-      const { showCanvasImagePreview, removeCanvasImagePreview } =
-        useNodeCanvasImagePreview()
-
-      const output = nodeOutputStore.getNodeOutputs(this)
-      const preview = nodeOutputStore.getNodePreviews(this)
-
-      const isNewOutput = output && this.images !== output.images
-      const isNewPreview = preview && this.preview !== preview
-
-      if (isNewPreview) this.preview = preview
-      if (isNewOutput) this.images = output.images
-
-      if (isNewOutput || isNewPreview) {
-        this.animatedImages = output?.animated?.find(Boolean)
-
-        const isAnimatedWebp =
-          this.animatedImages &&
-          output?.images?.some((img) => img.filename?.includes('webp'))
-        const isAnimatedPng =
-          this.animatedImages &&
-          output?.images?.some((img) => img.filename?.includes('png'))
-        const isVideo =
-          (this.animatedImages && !isAnimatedWebp && !isAnimatedPng) ||
-          isVideoNode(this)
-        if (isVideo) {
-          useNodeVideo(this).showPreview()
-        } else {
-          useNodeImage(this).showPreview()
-        }
-      }
-
-      // Nothing to do
-      if (!this.imgs?.length) return
-
-      if (this.animatedImages) {
-        removeCanvasImagePreview(this)
-        showAnimatedPreview(this)
-      } else {
-        removeAnimatedPreview(this)
-        showCanvasImagePreview(this)
-      }
-    }
-
     node.prototype.onDrawBackground = function () {
-      try {
-        unsafeDrawBackground.call(this)
-      } catch (error) {
-        console.error('Error drawing node background', error)
+      updatePreviews(this)
+
+      if (this instanceof SubgraphNode) {
+        const parentGraph = this.graph
+        for (const interiorNode of getPseudoWidgetPreviewTargets(this)) {
+          updatePreviews(interiorNode, () => {
+            parentGraph?.setDirtyCanvas(true)
+          })
+        }
       }
     }
   }
@@ -891,8 +873,8 @@ export const useLitegraphService = () => {
     const origNodeOnKeyDown = node.prototype.onKeyDown
 
     node.prototype.onKeyDown = function (e) {
-      // @ts-expect-error fixme ts strict error
-      if (origNodeOnKeyDown && origNodeOnKeyDown.apply(this, e) === false) {
+      const originalResult: unknown = origNodeOnKeyDown?.call(this, e)
+      if (originalResult === false) {
         return false
       }
 
@@ -903,19 +885,16 @@ export const useLitegraphService = () => {
       let handled = false
 
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        const imageIndex = this.imageIndex
+        if (imageIndex === undefined) return
         if (e.key === 'ArrowLeft') {
-          // @ts-expect-error fixme ts strict error
-          this.imageIndex -= 1
-        } else if (e.key === 'ArrowRight') {
-          // @ts-expect-error fixme ts strict error
-          this.imageIndex += 1
+          this.imageIndex = imageIndex - 1
+        } else {
+          this.imageIndex = imageIndex + 1
         }
-        // @ts-expect-error fixme ts strict error
         this.imageIndex %= this.imgs.length
 
-        // @ts-expect-error fixme ts strict error
         if (this.imageIndex < 0) {
-          // @ts-expect-error fixme ts strict error
           this.imageIndex = this.imgs.length + this.imageIndex
         }
         handled = true
@@ -924,7 +903,7 @@ export const useLitegraphService = () => {
         handled = true
       }
 
-      if (handled === true) {
+      if (handled) {
         e.preventDefault()
         e.stopImmediatePropagation()
         return false
@@ -934,9 +913,39 @@ export const useLitegraphService = () => {
 
   function addNodeOnGraph(
     nodeDef: ComfyNodeDefV1 | ComfyNodeDefV2,
-    options: Record<string, any> = {}
-  ): LGraphNode {
+    options: CreateNodeOptions = {},
+    addOptions?: GraphAddOptions
+  ): LGraphNode | null {
     options.pos ??= getCanvasCenter()
+
+    if (isBlueprintType(nodeDef.name)) {
+      const canvas = canvasStore.getCanvas()
+      const bp = useSubgraphStore().getBlueprint(nodeDef.name)
+      const items: object = {
+        nodes: bp.nodes,
+        subgraphs: bp.definitions?.subgraphs
+      }
+      const results = canvas._deserializeItems(items, {
+        position: options.pos
+      })
+      if (!results) throw new Error('Failed to add subgraph blueprint')
+      const node = results.nodes.values().next().value
+      if (!node)
+        throw new Error(
+          'Subgraph blueprint was added, but failed to resolve a subgraph Node'
+        )
+      if (addOptions?.ghost) {
+        node.flags.ghost = true
+        canvas.graph?.trigger('node:property:changed', {
+          nodeId: node.id,
+          property: 'flags.ghost',
+          oldValue: false,
+          newValue: true
+        })
+        canvas.startGhostPlacement(node, addOptions.dragEvent)
+      }
+      return node
+    }
 
     const node = LiteGraph.createNode(
       nodeDef.name,
@@ -944,24 +953,33 @@ export const useLitegraphService = () => {
       options
     )
 
-    const graph = useWorkflowStore().activeSubgraph ?? app.graph
+    const graph = useWorkflowStore().activeSubgraph ?? useApp().graph
+    if (!node) return null
 
-    // @ts-expect-error fixme ts strict error
-    graph.add(node)
-    // @ts-expect-error fixme ts strict error
+    graph.add(node, addOptions)
     return node
   }
 
-  function getCanvasCenter(): Vector2 {
-    const dpi = Math.max(window.devicePixelRatio ?? 1, 1)
-    const [x, y, w, h] = app.canvas.ds.visible_area
-    return [x + w / dpi / 2, y + h / dpi / 2]
+  function getCanvasCenter(): Point {
+    if (!useApp().isGraphReady) return [0, 0]
+    const visibleArea = useApp().canvas.ds.visible_area
+    const [x, y, w, h] = visibleArea
+    return [x + w / 2, y + h / 2]
   }
 
-  function goToNode(nodeId: NodeId) {
-    const graphNode = app.graph.getNodeById(nodeId)
+  function goToNode(nodeId: SerializedNodeId) {
+    const parsedNodeId = parseNodeId(nodeId)
+    if (!parsedNodeId) return
+    const graphNode = useApp().canvas.graph?.getNodeById(parsedNodeId)
     if (!graphNode) return
-    app.canvas.animateToBounds(graphNode.boundingRect)
+    useApp().canvas.animateToBounds(graphNode.boundingRect)
+  }
+
+  function ensureBounds(nodes: LGraphNode[]) {
+    for (const node of nodes) {
+      if (!node.boundingRect.every((i) => i === 0)) continue
+      node.updateArea()
+    }
   }
 
   /**
@@ -977,13 +995,16 @@ export const useLitegraphService = () => {
   }
 
   function fitView() {
-    const canvas = canvasStore.canvas
-    if (!canvas) return
-
-    const bounds = createBounds(app.graph.nodes)
+    const canvas = canvasStore.getCanvas()
+    const nodes = canvas.graph?.nodes
+    if (!nodes) return
+    ensureBounds(nodes)
+    const bounds = createBounds(nodes)
     if (!bounds) return
 
-    canvas.ds.fitToBounds(bounds)
+    canvas.ds.fitToBounds(bounds, {
+      viewport: visibleCanvasViewport(canvas)
+    })
     canvas.setDirty(true, true)
   }
 
@@ -991,9 +1012,14 @@ export const useLitegraphService = () => {
     registerNodeDef,
     registerSubgraphNodeDef,
     addNodeOnGraph,
+    addNodeInput,
     getCanvasCenter,
+    getExtraOptionsForWidget,
     goToNode,
     resetView,
-    fitView
+    fitView,
+    updatePreviews
   }
 }
+
+provideLitegraphService(useLitegraphService)

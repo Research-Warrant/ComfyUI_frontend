@@ -1,6 +1,6 @@
 <template>
-  <PanelTemplate value="About" class="about-container">
-    <h2 class="text-2xl font-bold mb-2">
+  <div class="about-container flex flex-col gap-2" data-testid="about-panel">
+    <h2 class="mb-2 text-2xl font-bold">
       {{ $t('g.about') }}
     </h2>
     <div class="space-y-2">
@@ -13,41 +13,35 @@
         class="about-badge inline-flex items-center no-underline"
         :title="badge.url"
       >
-        <Tag class="mr-2">
+        <Badge
+          class="mr-2"
+          :severity="badge.severity === 'warn' ? 'warning' : badge.severity"
+        >
           <template #icon>
-            <i :class="[badge.icon, 'mr-2 text-xl']" />
+            <i :class="cn(badge.icon, 'mr-2 text-xl')" />
           </template>
           {{ badge.label }}
-        </Tag>
+        </Badge>
       </a>
     </div>
 
-    <Divider />
+    <div class="my-4 border-t" />
 
     <SystemStatsPanel
       v-if="systemStatsStore.systemStats"
       :stats="systemStatsStore.systemStats"
     />
-  </PanelTemplate>
+  </div>
 </template>
 
 <script setup lang="ts">
-import Divider from 'primevue/divider'
-import Tag from 'primevue/tag'
-import { onMounted } from 'vue'
+import { cn } from '@comfyorg/tailwind-utils'
 
 import SystemStatsPanel from '@/components/common/SystemStatsPanel.vue'
+import Badge from '@comfyorg/design-system/badge/Badge'
 import { useAboutPanelStore } from '@/stores/aboutPanelStore'
 import { useSystemStatsStore } from '@/stores/systemStatsStore'
 
-import PanelTemplate from './PanelTemplate.vue'
-
 const systemStatsStore = useSystemStatsStore()
 const aboutPanelStore = useAboutPanelStore()
-
-onMounted(async () => {
-  if (!systemStatsStore.systemStats) {
-    await systemStatsStore.fetchSystemStats()
-  }
-})
 </script>

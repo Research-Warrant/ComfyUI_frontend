@@ -1,143 +1,202 @@
 <template>
-  <ButtonGroup
-    class="p-buttongroup-vertical absolute bottom-[10px] right-[10px] z-[1000]"
-    @wheel="canvasInteractions.handleWheel"
-  >
-    <Button
-      v-tooltip.left="t('graphCanvasMenu.zoomIn')"
-      severity="secondary"
-      icon="pi pi-plus"
-      :aria-label="$t('graphCanvasMenu.zoomIn')"
-      @mousedown="repeat('Comfy.Canvas.ZoomIn')"
-      @mouseup="stopRepeat"
-    />
-    <Button
-      v-tooltip.left="t('graphCanvasMenu.zoomOut')"
-      severity="secondary"
-      icon="pi pi-minus"
-      :aria-label="$t('graphCanvasMenu.zoomOut')"
-      @mousedown="repeat('Comfy.Canvas.ZoomOut')"
-      @mouseup="stopRepeat"
-    />
-    <Button
-      v-tooltip.left="t('graphCanvasMenu.fitView')"
-      severity="secondary"
-      icon="pi pi-expand"
-      :aria-label="$t('graphCanvasMenu.fitView')"
-      @click="() => commandStore.execute('Comfy.Canvas.FitView')"
-    />
-    <Button
-      v-tooltip.left="
-        t(
-          'graphCanvasMenu.' +
-            (canvasStore.canvas?.read_only ? 'panMode' : 'selectMode')
-        ) + ' (Space)'
-      "
-      severity="secondary"
-      :aria-label="
-        t(
-          'graphCanvasMenu.' +
-            (canvasStore.canvas?.read_only ? 'panMode' : 'selectMode')
-        )
-      "
-      @click="() => commandStore.execute('Comfy.Canvas.ToggleLock')"
-    >
-      <template #icon>
-        <i-material-symbols:pan-tool-outline
-          v-if="canvasStore.canvas?.read_only"
+  <div class="isolate">
+    <div v-if="hasActivePopup" class="fixed inset-0" @click="hideModal"></div>
+
+    <div class="pointer-events-none absolute inset-x-0 bottom-0 flex">
+      <div
+        role="toolbar"
+        :aria-label="t('graphCanvasMenu.canvasToolbar')"
+        class="pointer-events-auto ml-auto flex max-w-full min-w-0 gap-1 overflow-x-auto floating-panel"
+        @wheel="canvasInteractions.handleWheel"
+      >
+        <CanvasModeSelector
+          :button-styles="stringifiedMinimapStyles.buttonStyles"
         />
-        <i-simple-line-icons:cursor v-else />
-      </template>
-    </Button>
-    <Button
-      v-tooltip.left="t('graphCanvasMenu.toggleLinkVisibility')"
-      severity="secondary"
-      :icon="linkHidden ? 'pi pi-eye-slash' : 'pi pi-eye'"
-      :aria-label="$t('graphCanvasMenu.toggleLinkVisibility')"
-      data-testid="toggle-link-visibility-button"
-      @click="() => commandStore.execute('Comfy.Canvas.ToggleLinkVisibility')"
-    />
-    <Button
-      v-tooltip.left="minimapTooltip"
-      severity="secondary"
-      :icon="'pi pi-map'"
-      :aria-label="$t('graphCanvasMenu.toggleMinimap')"
-      :class="{ 'minimap-active': minimapVisible }"
-      data-testid="toggle-minimap-button"
-      @click="() => commandStore.execute('Comfy.Canvas.ToggleMinimap')"
-    />
-  </ButtonGroup>
+
+        <div class="h-[27px] w-px self-center bg-border" />
+
+        <Button
+          :tooltip="fitViewLabel"
+          variant="secondary"
+          :aria-label="fitViewLabel"
+          :style="stringifiedMinimapStyles.buttonStyles"
+          class="size-8 bg-transparent p-0"
+          @click="() => commandStore.execute('Comfy.Canvas.FitView')"
+        >
+          <i class="icon-[lucide--focus]" aria-hidden="true" />
+        </Button>
+
+        <Button
+          :tooltip="t('zoomControls.label')"
+          variant="secondary"
+          :class="
+            cn(
+              'h-8 w-15 bg-transparent p-0 hover:bg-accent',
+              isModalVisible && 'not-active:bg-muted'
+            )
+          "
+          :aria-label="t('zoomControls.label')"
+          data-testid="zoom-controls-button"
+          :style="stringifiedMinimapStyles.buttonStyles"
+          @click="toggleModal"
+        >
+          <span class="inline-flex items-center gap-1 px-2 text-xs">
+            <span>{{ canvasStore.appScalePercentage }}%</span>
+            <i class="icon-[lucide--chevron-down]" aria-hidden="true" />
+          </span>
+        </Button>
+
+        <div class="h-[27px] w-px self-center bg-border" />
+
+        <Button
+          :tooltip="minimapLabel"
+          variant="secondary"
+          :aria-label="minimapLabel"
+          data-testid="toggle-minimap-button"
+          :style="stringifiedMinimapStyles.buttonStyles"
+          :class="
+            cn(
+              'size-8 bg-transparent p-0 hover:bg-accent',
+              settingStore.get('Comfy.Minimap.Visible') && 'not-active:bg-muted'
+            )
+          "
+          @click="onMinimapToggleClick"
+        >
+          <i class="icon-[lucide--map]" aria-hidden="true" />
+        </Button>
+
+        <Button
+          :tooltip="linkVisibilityLabel"
+          variant="secondary"
+          :class="
+            cn(
+              'size-8 bg-transparent p-0 hover:bg-accent',
+              linkHidden && 'not-active:bg-muted'
+            )
+          "
+          :aria-label="linkVisibilityLabel"
+          data-testid="toggle-link-visibility-button"
+          :style="stringifiedMinimapStyles.buttonStyles"
+          @click="onLinkVisibilityToggleClick"
+        >
+          <i class="icon-[lucide--route-off]" aria-hidden="true" />
+        </Button>
+      </div>
+    </div>
+    <ZoomControlsModal :visible="isModalVisible" @close="hideModal" />
+  </div>
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import ButtonGroup from 'primevue/buttongroup'
-import { computed } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { useCanvasInteractions } from '@/composables/graph/useCanvasInteractions'
+import Button from '@comfyorg/design-system/button/Button'
+import { useZoomControls } from '@/composables/useZoomControls'
 import { LiteGraph } from '@/lib/litegraph/src/litegraph'
-import { useCommandStore } from '@/stores/commandStore'
-import { useCanvasStore } from '@/stores/graphStore'
-import { useKeybindingStore } from '@/stores/keybindingStore'
-import { useSettingStore } from '@/stores/settingStore'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useTelemetry } from '@comfyorg/telemetry'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { useCanvasInteractions } from '@/renderer/core/canvas/useCanvasInteractions'
+import { useMinimap } from '@/renderer/extensions/minimap/composables/useMinimap'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import { cn } from '@comfyorg/tailwind-utils'
+
+import CanvasModeSelector from './CanvasModeSelector.vue'
+import ZoomControlsModal from './modals/ZoomControlsModal.vue'
 
 const { t } = useI18n()
 const commandStore = useCommandStore()
+const { formatKeySequence } = useCommandStore()
 const canvasStore = useCanvasStore()
-const keybindingStore = useKeybindingStore()
 const settingStore = useSettingStore()
 const canvasInteractions = useCanvasInteractions()
+const minimap = useMinimap()
 
-const minimapVisible = computed(() => settingStore.get('Comfy.Minimap.Visible'))
-const minimapTooltip = computed(() => {
-  const baseText = t('graphCanvasMenu.toggleMinimap')
-  const keybinding = keybindingStore.getKeybindingByCommandId(
-    'Comfy.Canvas.ToggleMinimap'
-  )
-  return keybinding ? `${baseText} (${keybinding.combo.toString()})` : baseText
+const { isModalVisible, toggleModal, hideModal, hasActivePopup } =
+  useZoomControls()
+
+const stringifiedMinimapStyles = computed(() => {
+  const buttonKeys = ['borderRadius']
+  const additionalButtonStyles = {
+    border: 'none'
+  }
+
+  const containerStyles = minimap.containerStyles.value
+
+  const buttonStyles = {
+    ...Object.fromEntries(
+      Object.entries(containerStyles).filter(([key]) =>
+        buttonKeys.includes(key)
+      )
+    ),
+    ...additionalButtonStyles
+  }
+  return { buttonStyles }
 })
+
+// Computed properties for reactive states
 const linkHidden = computed(
   () => settingStore.get('Comfy.LinkRenderMode') === LiteGraph.HIDDEN_LINK
 )
 
-let interval: number | null = null
-const repeat = async (command: string) => {
-  if (interval) return
-  const cmd = () => commandStore.execute(command)
-  await cmd()
-  interval = window.setInterval(cmd, 100)
+// Computed properties for command text
+const fitViewCommandText = computed(() =>
+  formatKeySequence(
+    commandStore.getCommand('Comfy.Canvas.FitView')
+  ).toUpperCase()
+)
+const minimapCommandText = computed(() =>
+  formatKeySequence(
+    commandStore.getCommand('Comfy.Canvas.ToggleMinimap')
+  ).toUpperCase()
+)
+
+// Computed properties for tooltip and aria-label texts
+const fitViewLabel = computed(() => {
+  const label = t('graphCanvasMenu.fitView')
+  const shortcut = fitViewCommandText.value
+  return shortcut ? `${label} (${shortcut})` : label
+})
+const minimapLabel = computed(() => {
+  const label = settingStore.get('Comfy.Minimap.Visible')
+    ? t('zoomControls.hideMinimap')
+    : t('zoomControls.showMinimap')
+  const shortcut = minimapCommandText.value
+  return shortcut ? `${label} (${shortcut})` : label
+})
+const linkVisibilityLabel = computed(() =>
+  linkHidden.value
+    ? t('graphCanvasMenu.showLinks')
+    : t('graphCanvasMenu.hideLinks')
+)
+onMounted(() => {
+  canvasStore.initScaleSync()
+})
+
+/**
+ * Track minimap toggle button click and execute the command.
+ */
+const onMinimapToggleClick = () => {
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'graph_menu_minimap_toggle_clicked',
+    element_group: 'graph_menu'
+  })
+  void commandStore.execute('Comfy.Canvas.ToggleMinimap')
 }
-const stopRepeat = () => {
-  if (interval) {
-    clearInterval(interval)
-    interval = null
-  }
+
+/**
+ * Track hide/show links button click and execute the command.
+ */
+const onLinkVisibilityToggleClick = () => {
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'graph_menu_hide_links_toggle_clicked',
+    element_group: 'graph_menu'
+  })
+  void commandStore.execute('Comfy.Canvas.ToggleLinkVisibility')
 }
+
+onBeforeUnmount(() => {
+  canvasStore.cleanupScaleSync()
+})
 </script>
-
-<style scoped>
-.p-buttongroup-vertical {
-  display: flex;
-  flex-direction: column;
-  border-radius: var(--p-button-border-radius);
-  overflow: hidden;
-  border: 1px solid var(--p-panel-border-color);
-}
-
-.p-buttongroup-vertical .p-button {
-  margin: 0;
-  border-radius: 0;
-}
-
-.p-button.minimap-active {
-  background-color: var(--p-button-primary-background);
-  border-color: var(--p-button-primary-border-color);
-  color: var(--p-button-primary-color);
-}
-
-.p-button.minimap-active:hover {
-  background-color: var(--p-button-primary-hover-background);
-  border-color: var(--p-button-primary-hover-border-color);
-}
-</style>

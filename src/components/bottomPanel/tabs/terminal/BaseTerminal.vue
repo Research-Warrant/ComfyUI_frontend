@@ -1,15 +1,47 @@
 <template>
-  <div ref="rootEl" class="relative overflow-hidden h-full w-full bg-black">
-    <div class="p-terminal rounded-none h-full w-full p-2">
-      <div ref="terminalEl" class="h-full terminal-host" />
+  <div
+    ref="rootEl"
+    data-testid="terminal-root"
+    class="relative size-full overflow-hidden bg-neutral-900"
+  >
+    <div
+      class="size-full rounded-none p-2 [&_.xterm]:overflow-x-auto [&_.xterm]:overflow-y-hidden [&_.xterm-screen]:overflow-hidden [&_.xterm-screen]:bg-neutral-900"
+    >
+      <div ref="terminalEl" data-testid="terminal-host" class="h-full" />
     </div>
+    <Button
+      :tooltip="tooltipText"
+      tooltip-side="left"
+      data-testid="terminal-copy-button"
+      variant="secondary"
+      size="sm"
+      :class="
+        cn('absolute top-2 right-8 transition-opacity', {
+          'pointer-events-none opacity-0 select-none': !isHovered
+        })
+      "
+      :aria-label="tooltipText"
+      @click="handleCopy"
+    >
+      <i class="icon-[lucide--copy]" />
+    </Button>
   </div>
 </template>
 
 <script setup lang="ts">
-import { Ref, onUnmounted, ref } from 'vue'
+import { useElementHover, useEventListener } from '@vueuse/core'
+import type { IDisposable } from '@xterm/xterm'
+import type { Ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
+import Button from '@comfyorg/design-system/button/Button'
 import { useTerminal } from '@/composables/bottomPanelTabs/useTerminal'
+import { electronAPI } from '@/utils/envUtil'
+import { isDesktop } from '@/platform/distribution/types'
+import { cn } from '@comfyorg/tailwind-utils'
+
+const { t } = useI18n()
 
 const emit = defineEmits<{
   created: [ReturnType<typeof useTerminal>, Ref<HTMLElement | undefined>]
@@ -17,18 +49,57 @@ const emit = defineEmits<{
 }>()
 const terminalEl = ref<HTMLElement | undefined>()
 const rootEl = ref<HTMLElement | undefined>()
-emit('created', useTerminal(terminalEl), rootEl)
+const hasSelection = ref(false)
 
-onUnmounted(() => emit('unmounted'))
+const isHovered = useElementHover(rootEl)
+
+const terminalData = useTerminal(terminalEl)
+emit('created', terminalData, ref(rootEl))
+
+const { terminal } = terminalData
+let selectionDisposable: IDisposable | undefined
+
+const tooltipText = computed(() => {
+  return hasSelection.value
+    ? t('serverStart.copySelectionTooltip')
+    : t('serverStart.copyAllTooltip')
+})
+
+const handleCopy = async () => {
+  const existingSelection = terminal.getSelection()
+  const shouldSelectAll = !existingSelection
+  if (shouldSelectAll) terminal.selectAll()
+
+  const selectedText = shouldSelectAll
+    ? terminal.getSelection()
+    : existingSelection
+
+  if (selectedText) {
+    await navigator.clipboard.writeText(selectedText)
+
+    if (shouldSelectAll) {
+      terminal.clearSelection()
+    }
+  }
+}
+
+const showContextMenu = (event: MouseEvent) => {
+  event.preventDefault()
+  electronAPI()?.showContextMenu({ type: 'text' })
+}
+
+if (isDesktop) {
+  useEventListener(terminalEl, 'contextmenu', showContextMenu)
+}
+
+onMounted(() => {
+  selectionDisposable = terminal.onSelectionChange(() => {
+    hasSelection.value = terminal.hasSelection()
+  })
+})
+
+onUnmounted(() => {
+  selectionDisposable?.dispose()
+  emit('unmounted')
+})
 </script>
-
-<style scoped>
-:deep(.p-terminal) .xterm {
-  overflow-x: auto;
-}
-
-:deep(.p-terminal) .xterm-screen {
-  background-color: black;
-  overflow-y: hidden;
-}
-</style>

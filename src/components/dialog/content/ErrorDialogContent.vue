@@ -1,57 +1,54 @@
 <template>
-  <div class="comfy-error-report flex flex-col gap-4">
+  <div
+    data-testid="error-dialog"
+    class="comfy-error-report flex flex-col gap-4"
+  >
     <NoResultsPlaceholder
       class="pb-0"
-      icon="pi pi-exclamation-circle"
-      :title="title"
-      :message="error.exceptionMessage"
-      :text-class="'break-words max-w-[60vw]'"
-    />
+      icon="icon-[lucide--circle-alert]"
+      :message="message"
+      text-class="break-words max-w-[60vw]"
+    >
+      <template #title>
+        <DialogTitle as="h3" class="mb-2 text-[1.17em] font-bold">
+          {{ title }}
+        </DialogTitle>
+      </template>
+    </NoResultsPlaceholder>
     <template v-if="error.extensionFile">
       <span>{{ t('errorDialog.extensionFileHint') }}:</span>
       <br />
       <span class="font-bold">{{ error.extensionFile }}</span>
     </template>
 
-    <div class="flex gap-2 justify-center">
+    <div class="flex justify-center gap-2">
       <Button
         v-show="!reportOpen"
-        text
-        :label="$t('g.showReport')"
+        data-testid="error-dialog-show-report"
+        variant="textonly"
         @click="showReport"
-      />
+      >
+        {{ $t('g.showReport') }}
+      </Button>
       <Button
-        v-show="!sendReportOpen"
-        text
-        :label="$t('issueReport.helpFix')"
-        @click="showSendReport"
-      />
-      <Button
-        v-if="authStore.currentUser"
         v-show="!reportOpen"
-        text
-        :label="$t('issueReport.contactSupportTitle')"
+        data-testid="error-dialog-contact-support"
+        variant="textonly"
         @click="showContactSupport"
-      />
+      >
+        {{ $t('issueReport.helpFix') }}
+      </Button>
     </div>
     <template v-if="reportOpen">
-      <Divider />
-      <ScrollPanel class="w-full h-[400px] max-w-[80vw]">
-        <pre class="whitespace-pre-wrap break-words">{{ reportContent }}</pre>
-      </ScrollPanel>
-      <Divider />
+      <hr class="border-t border-border/50" />
+      <div class="h-[400px] w-full max-w-[80vw] overflow-auto">
+        <pre class="wrap-break-word whitespace-pre-wrap">{{
+          reportContent
+        }}</pre>
+      </div>
+      <hr class="border-t border-border/50" />
     </template>
-    <ReportIssuePanel
-      v-if="sendReportOpen"
-      :title="$t('issueReport.submitErrorReport')"
-      :error-type="error.reportType ?? 'unknownError'"
-      :extra-fields="[stackTraceField]"
-      :tags="{
-        exceptionMessage: error.exceptionMessage,
-        nodeType: error.nodeType ?? 'UNKNOWN'
-      }"
-    />
-    <div class="flex gap-4 justify-end">
+    <div class="flex justify-end gap-4">
       <FindIssueButton
         :error-message="error.exceptionMessage"
         :repo-owner="repoOwner"
@@ -59,41 +56,38 @@
       />
       <Button
         v-if="reportOpen"
-        :label="$t('g.copyToClipboard')"
-        icon="pi pi-copy"
+        data-testid="error-dialog-copy-report"
         @click="copyReportToClipboard"
-      />
+      >
+        <i class="icon-[lucide--copy]" />
+        {{ $t('g.copyToClipboard') }}
+      </Button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import Divider from 'primevue/divider'
-import ScrollPanel from 'primevue/scrollpanel'
-import { useToast } from 'primevue/usetoast'
+import { useToast } from '@/components/ui/toast/toastStore'
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import NoResultsPlaceholder from '@/components/common/NoResultsPlaceholder.vue'
+import NoResultsPlaceholder from '@comfyorg/design-system/common/NoResultsPlaceholder'
 import FindIssueButton from '@/components/dialog/content/error/FindIssueButton.vue'
+import Button from '@comfyorg/design-system/button/Button'
+import DialogTitle from '@comfyorg/design-system/dialog/DialogTitle'
 import { useCopyToClipboard } from '@/composables/useCopyToClipboard'
+import { resolveRunErrorMessage } from '@/platform/workflowErrors/errorCatalog/errorMessageResolver'
+import type { RunErrorMessageSource } from '@/platform/workflowErrors/errorCatalog/types'
+import { useTelemetry } from '@comfyorg/telemetry'
 import { api } from '@/scripts/api'
-import { app } from '@/scripts/app'
-import { useCommandStore } from '@/stores/commandStore'
-import { useFirebaseAuthStore } from '@/stores/firebaseAuthStore'
+import { useApp } from '@/scripts/appInstance'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
 import { useSystemStatsStore } from '@/stores/systemStatsStore'
-import type { ReportField } from '@/types/issueReportTypes'
-import {
-  type ErrorReportData,
-  generateErrorReport
-} from '@/utils/errorReportUtil'
+import { generateErrorReport } from '@/utils/errorReportUtil'
+import type { ErrorReportData } from '@/utils/errorReportUtil'
 
-import ReportIssuePanel from './error/ReportIssuePanel.vue'
-
-const authStore = useFirebaseAuthStore()
-
-const { error } = defineProps<{
+const { error, errorSources = [] } = defineProps<{
+  errorSources?: RunErrorMessageSource[]
   error: Omit<ErrorReportData, 'workflow' | 'systemStats' | 'serverLogs'> & {
     /**
      * The type of error report to submit.
@@ -111,46 +105,90 @@ const repoOwner = 'comfyanonymous'
 const repoName = 'ComfyUI'
 const reportContent = ref('')
 const reportOpen = ref(false)
+/**
+ * Open the error report content and track telemetry.
+ */
 const showReport = () => {
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'error_dialog_show_report_clicked',
+    element_group: 'error_dialog'
+  })
   reportOpen.value = true
-}
-const sendReportOpen = ref(false)
-const showSendReport = () => {
-  sendReportOpen.value = true
 }
 const toast = useToast()
 const { t } = useI18n()
 const systemStatsStore = useSystemStatsStore()
+const telemetry = useTelemetry()
 
-const title = computed<string>(
-  () => error.nodeType ?? error.exceptionType ?? t('errorDialog.defaultTitle')
+const resolvedErrors = computed(() =>
+  errorSources.map((source) => {
+    const resolved = resolveRunErrorMessage(source)
+    const rawMessage =
+      source.kind === 'execution'
+        ? source.error.exception_message
+        : resolved.displayMessage
+          ? source.error.details
+          : [source.error.message, source.error.details]
+              .filter(Boolean)
+              .join(': ')
+
+    return {
+      title: resolved.displayTitle,
+      message: [
+        source.kind === 'node_validation'
+          ? resolved.displayItemLabel
+          : undefined,
+        resolved.displayMessage,
+        resolved.displayDetails ?? rawMessage
+      ]
+        .filter(Boolean)
+        .join('\n')
+    }
+  })
+)
+const title = computed(() => {
+  const displayTitle =
+    [resolvedErrors.value[0]?.title, error.nodeType, error.exceptionType].find(
+      (candidate) => candidate?.trim()
+    ) || t('errorDialog.defaultTitle')
+
+  if (errorSources[0]?.kind !== 'execution') return displayTitle
+
+  const nodeTitle = error.nodeType?.trim() ? error.nodeType : displayTitle
+  return error.nodeId ? `${nodeTitle} (#${error.nodeId})` : nodeTitle
+})
+const message = computed(
+  () =>
+    resolvedErrors.value
+      .map((resolved) => resolved.message)
+      .filter(Boolean)
+      .join('\n\n') || error.exceptionMessage
 )
 
-const stackTraceField = computed<ReportField>(() => {
-  return {
-    label: t('issueReport.stackTrace'),
-    value: 'StackTrace',
-    optIn: true,
-    getData: () => error.traceback
-  }
-})
-
+/**
+ * Open contact support flow from error dialog and track telemetry.
+ */
 const showContactSupport = async () => {
+  telemetry?.trackHelpResourceClicked({
+    resource_type: 'help_feedback',
+    is_external: true,
+    source: 'error_dialog'
+  })
   await useCommandStore().execute('Comfy.ContactSupport')
 }
 
 onMounted(async () => {
   if (!systemStatsStore.systemStats) {
-    await systemStatsStore.fetchSystemStats()
+    await systemStatsStore.refetchSystemStats()
   }
 
   try {
-    const [logs] = await Promise.all([api.getLogs()])
+    const logs = await api.getLogs()
 
     reportContent.value = generateErrorReport({
       systemStats: systemStatsStore.systemStats!,
       serverLogs: logs,
-      workflow: app.graph.serialize(),
+      workflow: useApp().rootGraph.serialize(),
       exceptionType: error.exceptionType,
       exceptionMessage: error.exceptionMessage,
       traceback: error.traceback,
@@ -159,11 +197,8 @@ onMounted(async () => {
     })
   } catch (error) {
     console.error('Error fetching logs:', error)
-    toast.add({
-      severity: 'error',
-      summary: t('g.error'),
-      detail: t('toastMessages.failedToFetchLogs'),
-      life: 5000
+    toast.error(t('g.error'), {
+      description: t('toastMessages.failedToFetchLogs')
     })
   }
 })

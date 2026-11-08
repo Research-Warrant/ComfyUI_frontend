@@ -1,12 +1,10 @@
-import type { PrimitiveNode } from '@/extensions/core/widgetInputs'
-import { LGraph, LGraphNode } from '@/lib/litegraph/src/litegraph'
-import { Subgraph } from '@/lib/litegraph/src/litegraph'
-
-export function isPrimitiveNode(
-  node: LGraphNode
-): node is PrimitiveNode & LGraphNode {
-  return node.type === 'PrimitiveNode'
-}
+import type {
+  LGraph,
+  LGraphNode,
+  Subgraph
+} from '@comfyorg/graph-model/entityRegistry'
+import type { INodeSlot } from '@comfyorg/graph-model/interfaces'
+import type { ResultItemType } from '@comfyorg/api-client/resultItemTypeSchema'
 
 /**
  * Check if an error is an AbortError triggered by `AbortController#abort`
@@ -32,10 +30,35 @@ export const isNonNullish = <T>(item: T | undefined | null): item is T =>
  * These nodes are essential to subgraph structure and should not be removed.
  */
 export const isSubgraphIoNode = (
-  node: LGraphNode
+  node: Omit<LGraphNode, 'constructor'> & {
+    constructor?: LGraphNode['constructor']
+  }
 ): node is LGraphNode & {
   constructor: { comfyClass: 'SubgraphInputNode' | 'SubgraphOutputNode' }
 } => {
   const nodeClass = node.constructor?.comfyClass
   return nodeClass === 'SubgraphInputNode' || nodeClass === 'SubgraphOutputNode'
+}
+
+/**
+ * Type guard for slot objects (inputs/outputs)
+ */
+export const isSlotObject = (obj: unknown): obj is INodeSlot => {
+  return (
+    obj !== null &&
+    typeof obj === 'object' &&
+    'name' in obj &&
+    'type' in obj &&
+    'boundingRect' in obj
+  )
+}
+
+/**
+ * Type guard to check if a string is a valid ResultItemType
+ * ResultItemType is used for asset categorization (input/output/temp)
+ */
+export const isResultItemType = (
+  value: string | undefined
+): value is ResultItemType => {
+  return value === 'input' || value === 'output' || value === 'temp'
 }

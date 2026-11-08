@@ -1,31 +1,36 @@
 <!-- Reference:
 https://github.com/Nuked88/ComfyUI-N-Sidebar/blob/7ae7da4a9761009fb6629bc04c683087a3e168db/app/js/functions/sb_fn.js#L149
 -->
-
 <template>
-  <div class="_sb_node_preview">
+  <LGraphNodePreview
+    v-if="shouldRenderVueNodes"
+    :node-def="nodeDef"
+    :position="position"
+  />
+  <div v-else class="_sb_node_preview bg-node" data-testid="node-preview">
     <div class="_sb_table">
       <div
-        class="node_header overflow-ellipsis mr-4"
+        class="node_header text-ellipsis"
+        data-testid="node-header"
         :title="nodeDef.display_name"
         :style="{
           backgroundColor: litegraphColors.NODE_DEFAULT_COLOR,
           color: litegraphColors.NODE_TITLE_COLOR
         }"
       >
-        <div class="_sb_dot headdot pr-3" />
+        <div class="_sb_dot headdot pr-3" data-testid="head-dot" />
         {{ nodeDef.display_name }}
       </div>
       <div class="_sb_preview_badge">{{ $t('g.preview') }}</div>
 
       <!-- Node slot I/O -->
       <div
-        v-for="[slotInput, slotOutput] in _.zip(slotInputDefs, allOutputDefs)"
+        v-for="[slotInput, slotOutput] in zip(slotInputDefs, allOutputDefs)"
         :key="(slotInput?.name || '') + (slotOutput?.index.toString() || '')"
         class="_sb_row slot_row"
       >
         <div class="_sb_col">
-          <div v-if="slotInput" :class="['_sb_dot', slotInput.type]" />
+          <div v-if="slotInput" :class="cn('_sb_dot', slotInput.type)" />
         </div>
         <div class="_sb_col">
           {{ slotInput ? slotInput.name : '' }}
@@ -40,7 +45,7 @@ https://github.com/Nuked88/ComfyUI-N-Sidebar/blob/7ae7da4a9761009fb6629bc04c6830
           {{ slotOutput ? slotOutput.name : '' }}
         </div>
         <div class="_sb_col">
-          <div v-if="slotOutput" :class="['_sb_dot', slotOutput.type]" />
+          <div v-if="slotOutput" :class="cn('_sb_dot', slotOutput.type)" />
         </div>
       </div>
 
@@ -69,30 +74,39 @@ https://github.com/Nuked88/ComfyUI-N-Sidebar/blob/7ae7da4a9761009fb6629bc04c6830
         <div class="_sb_col _sb_arrow">&#x25B6;</div>
       </div>
     </div>
-    <div
+    <SanitizedHtml
       v-if="renderedDescription"
       class="_sb_description"
+      data-testid="node-description"
       :style="{
         color: litegraphColors.WIDGET_SECONDARY_TEXT_COLOR,
         backgroundColor: litegraphColors.WIDGET_BGCOLOR
       }"
-      v-html="renderedDescription"
+      :html="renderedDescription"
     />
   </div>
 </template>
 
 <script setup lang="ts">
-import _ from 'es-toolkit/compat'
+import { cn } from '@comfyorg/tailwind-utils'
+import { truncate, zip } from 'es-toolkit/compat'
 import { computed } from 'vue'
 
-import type { ComfyNodeDef as ComfyNodeDefV2 } from '@/schemas/nodeDef/nodeDefSchemaV2'
+import SanitizedHtml from '@comfyorg/design-system/common/SanitizedHtml'
+import { useVueFeatureFlags } from '@/composables/useVueFeatureFlags'
+import LGraphNodePreview from '@/renderer/extensions/vueNodes/components/LGraphNodePreview.vue'
+import type { ComfyNodeDef as ComfyNodeDefV2 } from '@comfyorg/object-info-parser/schemas/nodeDefSchemaV2'
+import { flattenInputSpecs } from '@/core/graph/nodeDef/inputSpecInterpreter'
 import { useWidgetStore } from '@/stores/widgetStore'
 import { useColorPaletteStore } from '@/stores/workspace/colorPaletteStore'
 import { renderMarkdownToHtml } from '@/utils/markdownRendererUtil'
 
-const { nodeDef } = defineProps<{
+const { nodeDef, position = 'absolute' } = defineProps<{
   nodeDef: ComfyNodeDefV2
+  position?: 'absolute' | 'relative'
 }>()
+
+const { shouldRenderVueNodes } = useVueFeatureFlags()
 
 const colorPaletteStore = useColorPaletteStore()
 const litegraphColors = computed(
@@ -107,7 +121,7 @@ const renderedDescription = computed(() => {
   return renderMarkdownToHtml(description)
 })
 
-const allInputDefs = Object.values(nodeDef.inputs)
+const allInputDefs = flattenInputSpecs(nodeDef.inputs)
 const allOutputDefs = nodeDef.outputs
 const slotInputDefs = allInputDefs.filter(
   (input) => !widgetStore.inputIsWidget(input)
@@ -115,7 +129,10 @@ const slotInputDefs = allInputDefs.filter(
 const widgetInputDefs = allInputDefs.filter((input) =>
   widgetStore.inputIsWidget(input)
 )
-const truncateDefaultValue = (value: any, charLimit: number = 32): string => {
+const truncateDefaultValue = (
+  value: unknown,
+  charLimit: number = 32
+): string => {
   let stringValue: string
 
   if (typeof value === 'object' && value !== null) {
@@ -128,7 +145,7 @@ const truncateDefaultValue = (value: any, charLimit: number = 32): string => {
     stringValue = String(value)
   }
 
-  return _.truncate(stringValue, { length: charLimit })
+  return truncate(stringValue, { length: charLimit })
 }
 </script>
 
@@ -196,15 +213,12 @@ const truncateDefaultValue = (value: any, charLimit: number = 32): string => {
 }
 
 ._sb_node_preview {
-  background-color: var(--comfy-menu-bg);
-  font-family: 'Open Sans', sans-serif;
-  font-size: small;
-  color: var(--descrip-text);
-  border: 1px solid var(--descrip-text);
+  color: var(--muted-foreground);
+  border: 1px solid var(--muted-foreground);
   min-width: 300px;
   width: min-content;
   height: fit-content;
-  z-index: 9999;
+  z-index: var(--z-index-overlay);
   border-radius: 12px;
   overflow: hidden;
   font-size: 12px;
@@ -214,7 +228,7 @@ const truncateDefaultValue = (value: any, charLimit: number = 32): string => {
 ._sb_node_preview ._sb_description {
   margin: 10px;
   padding: 6px;
-  background: var(--border-color);
+  background: var(--border);
   border-radius: 5px;
   font-style: italic;
   font-weight: 500;
@@ -259,22 +273,22 @@ const truncateDefaultValue = (value: any, charLimit: number = 32): string => {
 }
 
 ._long_field {
-  background: var(--bg-color);
-  border: 2px solid var(--border-color);
-  margin: 5px 5px 0 5px;
+  background: var(--background);
+  border: 2px solid var(--border);
+  margin: 5px 5px 0;
   border-radius: 10px;
   line-height: 1.7;
   text-wrap: nowrap;
 }
 
 ._sb_arrow {
-  color: var(--fg-color);
+  color: var(--foreground);
 }
 
 ._sb_preview_badge {
   text-align: center;
-  background: var(--comfy-input-bg);
-  font-weight: bold;
-  color: var(--error-text);
+  background: var(--input);
+  font-weight: 700;
+  color: var(--destructive);
 }
 </style>

@@ -1,0 +1,276 @@
+# Setting test expectation screenshots for Playwright
+name: 'PR: Update Playwright Expectations'
+
+on:
+  pull_request:
+    types: [labeled]
+  issue_comment:
+    types: [created, edited]
+
+concurrency:
+  group: >-
+    ${{ github.workflow }}-${{ (
+      github.event.label.name == 'New Browser Test Expectations' ||
+      (github.event.action == 'created' && contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, '/update-playwright')) ||
+      (github.event.comment.user.login == 'github-actions[bot]' && contains(github.event.comment.body, '- [x] Update Playwright expectations') && !contains(github.event.changes.body.from, '- [x] Update Playwright expectations'))
+    ) && (github.event.issue.number || github.event.number) || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    if: >
+      ( github.event_name == 'pull_request' && github.event.label.name == 'New Browser Test Expectations' ) ||
+      ( github.event.issue.pull_request &&
+        github.event_name == 'issue_comment' &&
+        github.event.action == 'created' &&
+        (
+          github.event.comment.author_association == 'OWNER' ||
+          github.event.comment.author_association == 'MEMBER' ||
+          github.event.comment.author_association == 'COLLABORATOR'
+        ) &&
+        startsWith(github.event.comment.body, '/update-playwright') ) ||
+      ( github.event.issue.pull_request &&
+        github.event_name == 'issue_comment' &&
+        github.event.comment.user.login == 'github-actions[bot]' &&
+        contains(github.event.comment.body, '<!-- section:playwright:start -->') &&
+        contains(github.event.comment.body, '- [x] Update Playwright expectations') &&
+        !contains(github.event.changes.body.from, '- [x] Update Playwright expectations') )
+    uses: ./.github/workflows/snapshot-update-plan.yaml
+    with:
+      command: /update-playwright
+      e2e-workflow: ci-tests-e2e.yaml
+      artifact-prefix: snapshot-updates-
+      job-prefix: playwright-tests
+      section-name: playwright-update
+      title: 🎭 Playwright Expectations Update
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.full == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      container-image: ${{ steps.container-image.outputs.image }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.head-sha }}
+
+      # issue_comment loads this workflow from the default branch. Resolve the
+      # image from the checked-out PR so regenerated snapshots match its CI.
+      - name: Resolve CI container image from PR branch
+        id: container-image
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          e2e_workflow='.github/workflows/ci-tests-e2e.yaml'
+          if [ ! -f "$e2e_workflow" ]; then
+            echo "::error::${e2e_workflow} not found on this PR branch; cannot resolve the CI container image"
+            exit 1
+          fi
+
+          # Require every E2E container to use the same static image.
+          mapfile -t images < <(
+            grep -oE "^[[:space:]]*image:[[:space:]]*['\"]?ghcr\.io/comfy-org/comfyui-ci-container:[A-Za-z0-9._-]+" "$e2e_workflow" |
+              grep -oE 'ghcr\.io/comfy-org/comfyui-ci-container:[A-Za-z0-9._-]+' |
+              sort -u
+          )
+          if [ "${#images[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one comfyui-ci-container image across the container jobs in ${e2e_workflow}, found ${#images[@]}: ${images[*]:-none}"
+            exit 1
+          fi
+
+          echo "Regenerating snapshots with ${images[0]} (resolved from the PR branch)"
+          echo "image=${images[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Warn when the update workflows differ from the default branch
+        shell: bash
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+
+          paths=(
+            .github/workflows/pr-update-playwright-expectations.yaml
+            .github/workflows/snapshot-update-plan.yaml
+            .github/workflows/snapshot-update-commit.yaml
+            .github/actions/stage-rewritten-snapshots
+          )
+
+          if ! git fetch --depth=1 origin "$DEFAULT_BRANCH"; then
+            echo "::notice::Could not fetch ${DEFAULT_BRANCH}; skipping workflow drift check"
+            exit 0
+          fi
+
+          changed=$(git diff --name-only FETCH_HEAD -- "${paths[@]}" | paste -sd ' ')
+          if [ -n "$changed" ]; then
+            echo "::warning::${changed} differ between this PR and ${DEFAULT_BRANCH}, and /update-playwright runs the ${DEFAULT_BRANCH} copies. Only the container image is taken from the PR."
+          fi
+
+      - name: Setup frontend
+        uses: ./.github/actions/setup-frontend
+        with:
+          include_build_step: true
+
+      # Upload built dist/ (containerized test jobs will pnpm install without cache)
+      - name: Upload built frontend
+        uses: actions/upload-artifact@v6
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 1
+
+      - name: Build cloud frontend
+        uses: ./.github/actions/build-cloud-frontend
+
+  # Shards 1-4 run against the plain build; the `cloud` leg runs @cloud
+  # tests against the frontend-dist-cloud build.
+  update-snapshots-sharded:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    container:
+      image: ${{ needs.build.outputs.container-image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, cloud]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.head-sha }}
+      - name: Download built frontend
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ matrix.shard == 'cloud' && 'frontend-dist-cloud' || 'frontend-dist' }}
+          path: dist/
+
+      - name: Start ComfyUI server
+        uses: ./.github/actions/start-comfyui-server
+
+      - name: Setup frontend
+        uses: ./.github/actions/setup-frontend
+        with:
+          node_cache: 'false'
+
+      # Snapshot rewrites fail the test command, so validate its JSON report.
+      - name: Update snapshots (${{ matrix.shard == 'cloud' && 'cloud' || format('Shard {0}/4', matrix.shard) }})
+        id: playwright-tests
+        env:
+          PLAYWRIGHT_JSON_OUTPUT_NAME: /tmp/playwright-results.json
+        run: pnpm exec playwright test --update-snapshots --reporter=json,html --grep @screenshot ${{ matrix.shard == 'cloud' && '--project=cloud' || format('--grep-invert @cloud --shard={0}/4', matrix.shard) }}
+        continue-on-error: true
+
+      - name: Checkout snapshot actions from the workflow's ref
+        uses: actions/checkout@v7
+        with:
+          path: trusted
+          sparse-checkout: .github/actions
+          persist-credentials: false
+
+      - name: Stage changed snapshot files
+        id: changed-snapshots
+        uses: ./trusted/.github/actions/stage-rewritten-snapshots
+
+      # Reject test failures that produced no rewritten snapshots.
+      - name: Verify shard did the work it claims
+        shell: bash
+        env:
+          SHARD: ${{ matrix.shard }}
+          HAS_CHANGES: ${{ steps.changed-snapshots.outputs.has-changes }}
+        run: |
+          set -uo pipefail
+
+          results='/tmp/playwright-results.json'
+
+          # Playwright still writes a report when zero tests match.
+          if [ ! -f "$results" ]; then
+            echo "::error::Shard ${SHARD}: Playwright wrote no JSON report, so it never completed a run. Refusing to report success."
+            exit 1
+          fi
+
+          # Node is available in the CI container; jq may not be.
+          if ! summary=$(node -e '
+            const fs = require("fs");
+            const r = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const s = r.stats;
+            if (!s) throw new Error("no stats in report");
+            const n = (v) => (typeof v === "number" ? v : 0);
+            const notPassing = n(s.unexpected) + n(s.flaky);
+            const ran = n(s.expected) + notPassing;
+            const errs = Array.isArray(r.errors) ? r.errors.length : 0;
+            console.log(ran + " " + notPassing + " " + errs);
+            console.log(JSON.stringify(s));
+          ' "$results" 2>&1); then
+            echo "::error::Shard ${SHARD}: Playwright JSON report is unreadable or has no stats. Refusing to report success."
+            echo "$summary"
+            exit 1
+          fi
+
+          read -r ran not_passing error_count <<< "$(printf '%s\n' "$summary" | head -1)"
+          echo "Shard ${SHARD} stats: $(printf '%s\n' "$summary" | tail -1)"
+
+          # An empty grep result is valid despite Playwright's non-zero exit.
+          if [ "$ran" -eq 0 ]; then
+            echo "::notice::Shard ${SHARD}: no tests matched this shard's filters; nothing to regenerate."
+            exit 0
+          fi
+
+          if [ "$error_count" -gt 0 ]; then
+            echo "::error::Shard ${SHARD}: Playwright reported ${error_count} top-level error(s); the regenerated baselines may be incomplete."
+            exit 1
+          fi
+
+          # Snapshot rewrites appear as unexpected or flaky tests.
+          if [ "$not_passing" -gt 0 ] && [ "${HAS_CHANGES:-false}" != 'true' ]; then
+            echo "::error::Shard ${SHARD}: ${not_passing} test(s) did not pass yet no snapshot was rewritten. That is a broken run, not an absence of drift. Refusing to report success."
+            exit 1
+          fi
+
+          echo "Shard ${SHARD}: ${ran} test(s) ran, ${not_passing} not passing, snapshot changes=${HAS_CHANGES:-false}"
+
+      - name: Upload rewritten snapshots
+        if: steps.changed-snapshots.outputs.has-changes == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: snapshot-updates-shard-${{ matrix.shard }}
+          path: ${{ steps.changed-snapshots.outputs.path }}
+          retention-days: 1
+          overwrite: true
+
+      - name: Upload test report
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: playwright-report-shard-${{ matrix.shard }}
+          path: ./playwright-report/
+          retention-days: 30
+
+  commit:
+    needs: [plan, update-snapshots-sharded]
+    if: ${{ !cancelled() && needs.plan.result != 'skipped' }}
+    uses: ./.github/workflows/snapshot-update-commit.yaml
+    with:
+      ready: ${{ needs.plan.outputs.run-id != '' || needs.update-snapshots-sharded.result == 'success' }}
+      unavailable: ${{ needs.plan.outputs.unavailable }}
+      missing: ${{ needs.plan.outputs.missing }}
+      pr-number: ${{ github.event.issue.number || github.event.number }}
+      branch: ${{ needs.plan.outputs.branch }}
+      head-sha: ${{ needs.plan.outputs.head-sha }}
+      run-id: ${{ needs.plan.outputs.run-id }}
+      artifact-prefix: snapshot-updates-
+      config-dir: .
+      label: New Browser Test Expectations
+      section-name: playwright-update
+      title: 🎭 Playwright Expectations Update
+    secrets:
+      PR_GH_TOKEN: ${{ secrets.PR_GH_TOKEN }}

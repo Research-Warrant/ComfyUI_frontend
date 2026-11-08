@@ -1,22 +1,29 @@
 <template>
   <div
     v-if="showInput"
-    class="group-title-editor node-title-editor"
+    class="group-title-editor node-title-editor z-overlay p-1"
     :style="inputStyle"
   >
     <EditableText
       :is-editing="showInput"
       :model-value="editedTitle"
+      class="size-full"
+      :input-attrs="{
+        'data-testid': 'node-title-input',
+        class: 'size-full text-[length:inherit]'
+      }"
       @edit="onEdit"
+      @cancel="closeEditor"
     />
   </div>
 </template>
 
 <script setup lang="ts">
 import { useEventListener } from '@vueuse/core'
-import { type CSSProperties, computed, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
+import type { CSSProperties } from 'vue'
 
-import EditableText from '@/components/common/EditableText.vue'
+import EditableText from '@comfyorg/design-system/common/EditableText'
 import { useAbsolutePosition } from '@/composables/element/useAbsolutePosition'
 import {
   LGraphGroup,
@@ -24,9 +31,12 @@ import {
   LiteGraph
 } from '@/lib/litegraph/src/litegraph'
 import type { LiteGraphCanvasEvent } from '@/lib/litegraph/src/litegraph'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import {
+  useCanvasStore,
+  useTitleEditorStore
+} from '@/renderer/core/canvas/canvasStore'
 import { app } from '@/scripts/app'
-import { useCanvasStore, useTitleEditorStore } from '@/stores/graphStore'
-import { useSettingStore } from '@/stores/settingStore'
 
 const settingStore = useSettingStore()
 
@@ -44,7 +54,7 @@ const canvasStore = useCanvasStore()
 const previousCanvasDraggable = ref(true)
 
 const onEdit = (newValue: string) => {
-  if (titleEditorStore.titleEditorTarget && newValue.trim() !== '') {
+  if (titleEditorStore.titleEditorTarget && newValue?.trim()) {
     const trimmedTitle = newValue.trim()
     titleEditorStore.titleEditorTarget.title = trimmedTitle
 
@@ -54,8 +64,12 @@ const onEdit = (newValue: string) => {
       target.subgraph.name = trimmedTitle
     }
 
-    app.graph.setDirtyCanvas(true, true)
+    app.canvas.setDirty(true, true)
   }
+  closeEditor()
+}
+
+function closeEditor() {
   showInput.value = false
   titleEditorStore.titleEditorTarget = null
   canvasStore.canvas!.allow_dragcanvas = previousCanvasDraggable.value
@@ -80,7 +94,9 @@ watch(
         pos: group.pos,
         size: [group.size[0], group.titleHeight]
       })
-      inputFontStyle.value = { fontSize: `${group.font_size * scale}px` }
+      inputFontStyle.value = {
+        fontSize: `${LiteGraph.GROUP_TEXT_SIZE * scale}px`
+      }
     } else if (target instanceof LGraphNode) {
       const node = target
       const [x, y] = node.getBounding()
@@ -127,22 +143,3 @@ const canvasEventHandler = (event: LiteGraphCanvasEvent) => {
 
 useEventListener(document, 'litegraph:canvas', canvasEventHandler)
 </script>
-
-<style scoped>
-.group-title-editor.node-title-editor {
-  z-index: 9999;
-  padding: 0.25rem;
-}
-
-:deep(.editable-text) {
-  width: 100%;
-  height: 100%;
-}
-
-:deep(.editable-text input) {
-  width: 100%;
-  height: 100%;
-  /* Override the default font size */
-  font-size: inherit;
-}
-</style>

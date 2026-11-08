@@ -1,52 +1,75 @@
-import type { NodeId } from '@/lib/litegraph/src/LGraphNode'
-import type { LinkConnector } from '@/lib/litegraph/src/canvas/LinkConnector'
+import type {
+  LinkConnector,
+  Subgraph,
+  SubgraphInput,
+  SubgraphOutput
+} from '@comfyorg/graph-model/entityRegistry'
+import { toSelectableKey } from '@/core/selection/selectionState'
+import { isSelectedIn, setSelectedIn } from '@/core/selection/selectionStore'
+import { graphScopeOf } from '@comfyorg/graph-model/graphScopeId'
+import { serializeNodeId } from '@comfyorg/graph-model/nodeId'
+import type { NodeId } from '@comfyorg/graph-model/nodeId'
+
 import { Rectangle } from '@/lib/litegraph/src/infrastructure/Rectangle'
 import type {
   DefaultConnectionColors,
+  Positionable,
+  CanvasColour
+} from '@comfyorg/graph-model/interfaces'
+import type { PointTuple as Point } from '@comfyorg/shared-frontend-utils/geometry'
+import type {
   Hoverable,
+  CanvasPointerEvent
+} from '@comfyorg/graph-model/events'
+import type {
   INodeInputSlot,
-  INodeOutputSlot,
-  Point,
-  Positionable
-} from '@/lib/litegraph/src/interfaces'
-import {
-  type CanvasColour,
-  type CanvasPointer,
-  type CanvasPointerEvent,
-  type IContextMenuValue,
-  LiteGraph
-} from '@/lib/litegraph/src/litegraph'
+  INodeOutputSlot
+} from '@comfyorg/graph-model/slots'
+import { LiteGraph } from '@/lib/litegraph/src/litegraphInstance'
+import type { CanvasPointer } from '@/lib/litegraph/src/CanvasPointer'
+import type { IContextMenuValue } from '@/lib/litegraph/src/types/contextMenu'
 import { snapPoint } from '@/lib/litegraph/src/measure'
-import { CanvasItem } from '@/lib/litegraph/src/types/globalEnums'
+import { CanvasItem } from '@comfyorg/graph-model/globalEnums'
 import type {
   ExportedSubgraphIONode,
   Serialisable
-} from '@/lib/litegraph/src/types/serialisation'
+} from '@comfyorg/graph-model/serialisation'
 
 import type { EmptySubgraphInput } from './EmptySubgraphInput'
 import type { EmptySubgraphOutput } from './EmptySubgraphOutput'
-import type { Subgraph } from './Subgraph'
-import type { SubgraphInput } from './SubgraphInput'
-import type { SubgraphOutput } from './SubgraphOutput'
 
 export abstract class SubgraphIONodeBase<
-    TSlot extends SubgraphInput | SubgraphOutput
-  >
+  TSlot extends SubgraphInput | SubgraphOutput
+>
   implements Positionable, Hoverable, Serialisable<ExportedSubgraphIONode>
 {
   static margin = 10
   static minWidth = 100
-  static roundedRadius = 10
+  static roundedRadius = 14 // Matches NODE_SLOT_HEIGHT * 0.7 for slot alignment
 
-  readonly #boundingRect: Rectangle = new Rectangle()
+  private readonly _boundingRect: Rectangle = new Rectangle()
 
   abstract readonly id: NodeId
 
   get boundingRect(): Rectangle {
-    return this.#boundingRect
+    return this._boundingRect
   }
 
-  selected: boolean = false
+  get selected(): boolean {
+    return isSelectedIn(
+      graphScopeOf(this.subgraph),
+      toSelectableKey('io', this.id)
+    )
+  }
+
+  set selected(value: boolean) {
+    setSelectedIn(
+      graphScopeOf(this.subgraph),
+      toSelectableKey('io', this.id),
+      value
+    )
+  }
+
   pinned: boolean = false
   readonly removable = false
 
@@ -87,13 +110,19 @@ export abstract class SubgraphIONodeBase<
   ) {}
 
   move(deltaX: number, deltaY: number): void {
-    this.pos[0] += deltaX
-    this.pos[1] += deltaY
+    this.pos = [this.pos[0] + deltaX, this.pos[1] + deltaY]
   }
 
   /** @inheritdoc */
   snapToGrid(snapTo: number): boolean {
-    return this.pinned ? false : snapPoint(this.pos, snapTo)
+    if (this.pinned || !snapTo) return false
+
+    const snapped: Point = [this.pos[0], this.pos[1]]
+    snapPoint(snapped, snapTo)
+    if (snapped[0] === this.pos[0] && snapped[1] === this.pos[1]) return false
+
+    this.pos = snapped
+    return true
   }
 
   abstract onPointerDown(
@@ -181,7 +210,7 @@ export abstract class SubgraphIONodeBase<
   ): void {
     // Only allow renaming non-empty slots
     if (slot !== this.emptySlot) {
-      this.#promptForSlotRename(slot, event)
+      this._promptForSlotRename(slot, event)
     }
   }
 
@@ -191,14 +220,14 @@ export abstract class SubgraphIONodeBase<
    * @param event The event that triggered the context menu.
    */
   protected showSlotContextMenu(slot: TSlot, event: CanvasPointerEvent): void {
-    const options: (IContextMenuValue | null)[] = this.#getSlotMenuOptions(slot)
+    const options: (IContextMenuValue | null)[] = this._getSlotMenuOptions(slot)
     if (!(options.length > 0)) return
 
     new LiteGraph.ContextMenu(options, {
-      event: event as any,
+      event,
       title: slot.name || 'Subgraph Output',
       callback: (item: IContextMenuValue) => {
-        this.#onSlotMenuAction(item, slot, event)
+        this._onSlotMenuAction(item, slot, event)
       }
     })
   }
@@ -208,7 +237,7 @@ export abstract class SubgraphIONodeBase<
    * @param slot The slot to get the context menu options for.
    * @returns The context menu options.
    */
-  #getSlotMenuOptions(slot: TSlot): (IContextMenuValue | null)[] {
+  private _getSlotMenuOptions(slot: TSlot): (IContextMenuValue | null)[] {
     const options: (IContextMenuValue | null)[] = []
 
     // Disconnect option if slot has connections
@@ -239,7 +268,7 @@ export abstract class SubgraphIONodeBase<
    * @param slot The slot
    * @param event The event that triggered the context menu.
    */
-  #onSlotMenuAction(
+  private _onSlotMenuAction(
     selectedItem: IContextMenuValue,
     slot: TSlot,
     event: CanvasPointerEvent
@@ -260,12 +289,12 @@ export abstract class SubgraphIONodeBase<
       // Rename the slot
       case 'rename':
         if (slot !== this.emptySlot) {
-          this.#promptForSlotRename(slot, event)
+          this._promptForSlotRename(slot, event)
         }
         break
     }
 
-    this.subgraph.setDirtyCanvas(true)
+    this.subgraph.setDirtyCanvas(true, true)
   }
 
   /**
@@ -273,7 +302,7 @@ export abstract class SubgraphIONodeBase<
    * @param slot The slot to rename.
    * @param event The event that triggered the rename.
    */
-  #promptForSlotRename(slot: TSlot, event: CanvasPointerEvent): void {
+  private _promptForSlotRename(slot: TSlot, event: CanvasPointerEvent): void {
     this.subgraph.canvasAction((c) =>
       c.prompt(
         'Slot name',
@@ -291,7 +320,6 @@ export abstract class SubgraphIONodeBase<
     const { minWidth, roundedRadius } = SubgraphIONodeBase
     const [, y] = this.boundingRect
     const x = this.slotAnchorX
-    const { size } = this
 
     let maxWidth = minWidth
     let currentY = y + roundedRadius
@@ -304,8 +332,7 @@ export abstract class SubgraphIONodeBase<
       if (slotWidth > maxWidth) maxWidth = slotWidth
     }
 
-    size[0] = maxWidth + 2 * roundedRadius
-    size[1] = currentY - y + roundedRadius
+    this.size = [maxWidth + 2 * roundedRadius, currentY - y + roundedRadius]
   }
 
   draw(
@@ -353,7 +380,7 @@ export abstract class SubgraphIONodeBase<
     editorAlpha?: number
   ): void {
     ctx.fillStyle = '#AAA'
-    ctx.font = '12px Arial'
+    ctx.font = '12px Inter, sans-serif'
     ctx.textBaseline = 'middle'
 
     for (const slot of this.allSlots) {
@@ -362,15 +389,23 @@ export abstract class SubgraphIONodeBase<
   }
 
   configure(data: ExportedSubgraphIONode): void {
-    this.#boundingRect.set(data.bounding)
+    this._boundingRect.set(data.bounding)
     this.pinned = data.pinned ?? false
   }
 
   asSerialisable(): ExportedSubgraphIONode {
     return {
-      id: this.id,
+      id: serializeNodeId(this.id),
       bounding: this.boundingRect.export(),
       pinned: this.pinned ? true : undefined
     }
   }
+}
+
+type RegisteredSubgraphIONode = SubgraphIONodeBase<
+  SubgraphInput | SubgraphOutput
+>
+
+declare module '@comfyorg/graph-model/entityRegistry' {
+  interface SubgraphIONode extends RegisteredSubgraphIONode {}
 }

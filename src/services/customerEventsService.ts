@@ -1,11 +1,15 @@
-import axios, { AxiosError, AxiosResponse } from 'axios'
-import { ref } from 'vue'
-import { useI18n } from 'vue-i18n'
-
-import { COMFY_API_BASE_URL } from '@/config/comfyApi'
-import { useFirebaseAuthStore } from '@/stores/firebaseAuthStore'
-import { type components, operations } from '@/types/comfyRegistryTypes'
-import { isAbortError } from '@/utils/typeGuardUtil'
+import {
+  formatCredits,
+  isSubCreditCharge,
+  microUsdToCredits
+} from '@/base/credits/comfyCredits'
+import {
+  hasParamsBeyondDetailsColumn,
+  presentTooltipParamKeys,
+  toFiniteNumber
+} from '@/services/customerEventParams'
+import { d, i18n, t } from '@/i18n'
+import type { components } from '@/types/comfyRegistryTypes'
 
 export enum EventType {
   CREDIT_ADDED = 'credit_added',
@@ -14,83 +18,24 @@ export enum EventType {
   API_USAGE_COMPLETED = 'api_usage_completed'
 }
 
-type CustomerEventsResponse =
-  operations['GetCustomerEvents']['responses']['200']['content']['application/json']
-
-type CustomerEventsResponseQuery =
-  operations['GetCustomerEvents']['parameters']['query']
-
 export type AuditLog = components['schemas']['AuditLog']
 
-const customerApiClient = axios.create({
-  baseURL: COMFY_API_BASE_URL,
-  headers: {
-    'Content-Type': 'application/json'
-  }
-})
-
 export const useCustomerEventsService = () => {
-  const isLoading = ref(false)
-  const error = ref<string | null>(null)
-  const { d } = useI18n()
-
-  const handleRequestError = (
-    err: unknown,
-    context: string,
-    routeSpecificErrors?: Record<number, string>
-  ) => {
-    // Don't treat cancellation as an error
-    if (isAbortError(err)) return
-
-    let message: string
-    if (!axios.isAxiosError(err)) {
-      message = `${context} failed: ${err instanceof Error ? err.message : String(err)}`
-    } else {
-      const axiosError = err as AxiosError<{ message: string }>
-      const status = axiosError.response?.status
-      if (status && routeSpecificErrors?.[status]) {
-        message = routeSpecificErrors[status]
-      } else {
-        message =
-          axiosError.response?.data?.message ??
-          `${context} failed with status ${status}`
-      }
-    }
-
-    error.value = message
-  }
-
-  const executeRequest = async <T>(
-    requestCall: () => Promise<AxiosResponse<T>>,
-    options: {
-      errorContext: string
-      routeSpecificErrors?: Record<number, string>
-    }
-  ): Promise<T | null> => {
-    const { errorContext, routeSpecificErrors } = options
-
-    isLoading.value = true
-    error.value = null
-
-    try {
-      const response = await requestCall()
-      return response.data
-    } catch (err) {
-      handleRequestError(err, errorContext, routeSpecificErrors)
-      return null
-    } finally {
-      isLoading.value = false
-    }
-  }
-
   function formatEventType(eventType: string) {
     switch (eventType) {
       case 'credit_added':
-        return 'Credits Added'
+      case 'topup_completed':
+        return t('credits.eventTypes.creditAdded')
       case 'account_created':
-        return 'Account Created'
+        return t('credits.eventTypes.accountCreated')
       case 'api_usage_completed':
-        return 'API Usage'
+        return t('credits.eventTypes.apiUsage')
+      case 'gpu_usage':
+        return t('credits.eventTypes.gpuUsage')
+      case 'api_node_usage':
+        return t('credits.eventTypes.apiNodeUsage')
+      case 'agent_usage':
+        return t('credits.eventTypes.agentUsage')
       default:
         return eventType
     }
@@ -114,14 +59,15 @@ export const useCustomerEventsService = () => {
       .join(' ')
   }
 
-  function formatJsonValue(value: any) {
+  function formatJsonValue(value: unknown) {
     if (typeof value === 'number') {
-      // Format numbers with commas and decimals if needed
       return value.toLocaleString()
     }
-    if (typeof value === 'string' && value.match(/^\d{4}-\d{2}-\d{2}/)) {
-      // Format dates nicely
-      return new Date(value).toLocaleString()
+    if (typeof value === 'string') {
+      const date = new Date(value)
+      if (!Number.isNaN(date.getTime()) && /^\d{4}-\d{2}-\d{2}T/.test(value)) {
+        return d(date, { dateStyle: 'medium', timeStyle: 'short' })
+      }
     }
     return value
   }
@@ -129,31 +75,48 @@ export const useCustomerEventsService = () => {
   function getEventSeverity(eventType: string) {
     switch (eventType) {
       case 'credit_added':
+      case 'topup_completed':
         return 'success'
       case 'account_created':
         return 'info'
       case 'api_usage_completed':
+      case 'gpu_usage':
+      case 'api_node_usage':
+      case 'agent_usage':
         return 'warning'
       default:
         return 'info'
     }
   }
 
-  function hasAdditionalInfo(event: AuditLog) {
-    const { amount, api_name, model, ...otherParams } = event.params || {}
-    return Object.keys(otherParams).length > 0
+  function formatChargeCredits(microUsd: number) {
+    const credits = microUsdToCredits(microUsd)
+    if (isSubCreditCharge(credits)) {
+      return `${t('credits.lessThanOne')} ${t('credits.creditUnit', 2)}`
+    }
+    const amount = formatCredits({
+      value: credits,
+      locale: i18n.global.locale.value,
+      numberOptions: { minimumFractionDigits: 0, maximumFractionDigits: 0 }
+    })
+    return `${amount} ${t('credits.creditUnit', Math.round(credits))}`
+  }
+
+  function formatTooltipParam(key: string, value: unknown) {
+    const microUsd =
+      key === 'charge_micro_usd' ? toFiniteNumber(value) : undefined
+    if (microUsd !== undefined) {
+      return `${t('credits.charge')}: ${formatChargeCredits(microUsd)}`
+    }
+    return `${formatJsonKey(key)}: ${formatJsonValue(value)}`
   }
 
   function getTooltipContent(event: AuditLog) {
-    const { ...params } = event.params || {}
+    const params = event.params || {}
 
-    return Object.entries(params)
-      .map(([key, value]) => {
-        const formattedKey = formatJsonKey(key)
-        const formattedValue = formatJsonValue(value)
-        return `<strong>${formattedKey}:</strong> ${formattedValue}`
-      })
-      .join('<br>')
+    return presentTooltipParamKeys(params)
+      .map((key) => formatTooltipParam(key, params[key]))
+      .join('\n')
   }
 
   function formatAmount(amountMicros?: number) {
@@ -161,44 +124,11 @@ export const useCustomerEventsService = () => {
     return (amountMicros / 100).toFixed(2)
   }
 
-  async function getMyEvents({
-    page = 1,
-    limit = 10
-  }: CustomerEventsResponseQuery = {}): Promise<CustomerEventsResponse | null> {
-    const errorContext = 'Fetching customer events'
-    const routeSpecificErrors = {
-      400: 'Invalid input, object invalid',
-      404: 'Not found'
-    }
-
-    // Get auth headers
-    const authHeaders = await useFirebaseAuthStore().getAuthHeader()
-    if (!authHeaders) {
-      error.value = 'Authentication header is missing'
-      return null
-    }
-
-    return executeRequest<CustomerEventsResponse>(
-      () =>
-        customerApiClient.get('/customers/events', {
-          params: { page, limit },
-          headers: authHeaders
-        }),
-      { errorContext, routeSpecificErrors }
-    )
-  }
-
   return {
-    // State
-    isLoading,
-    error,
-
-    // Methods
-    getMyEvents,
     formatEventType,
     getEventSeverity,
     formatAmount,
-    hasAdditionalInfo,
+    hasAdditionalInfo: hasParamsBeyondDetailsColumn,
     formatDate,
     formatJsonKey,
     formatJsonValue,

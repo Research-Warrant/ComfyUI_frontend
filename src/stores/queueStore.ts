@@ -1,26 +1,30 @@
-import _ from 'es-toolkit/compat'
 import { defineStore } from 'pinia'
-import { computed, ref, toRaw } from 'vue'
+import { computed, ref, shallowRef, toRaw, toValue } from 'vue'
 
+import { extractWorkflow } from '@comfyorg/api-client/fetchJobs'
 import type {
-  ResultItem,
-  StatusWsMessageStatus,
-  TaskItem,
-  TaskOutput,
-  TaskPrompt,
-  TaskStatus,
+  APITaskType,
+  JobListItem,
   TaskType
-} from '@/schemas/apiSchema'
-import type { ComfyWorkflowJSON, NodeId } from '@/schemas/comfyWorkflowSchema'
+} from '@comfyorg/api-client/jobTypes'
+import type {
+  StatusWsMessageStatus,
+  TaskOutput
+} from '@comfyorg/api-client/executionTypes'
 import { api } from '@/scripts/api'
-import type { ComfyApp } from '@/scripts/app'
-import { useExtensionService } from '@/services/extensionService'
-import { useNodeOutputStore } from '@/stores/imagePreviewStore'
+import type { AugmentedResultItem } from '@/utils/resultItem'
+import { filterPreviewableResults } from '@/utils/resultItem'
+import { parseTaskOutput } from '@/stores/resultItemParsing'
+import type { ComfyApp } from '@/types/comfy'
+import { useExtensionServiceAccess } from '@/platform/extensions/services/extensionServiceAccess'
+import { getJobDetail } from '@/services/jobOutputCache'
+import { useNodeOutputStore } from '@/stores/nodeOutputStore'
+import { useExecutionStore } from '@/stores/executionStore'
+import { useJobModelDownloadStore } from '@/stores/jobModelDownloadStore'
+import { tryNormalizeNodeExecutionId } from '@comfyorg/graph-model/nodeIdentification'
+import { useSettingStore } from '@/platform/settings/settingStore'
 
-// Task type used in the API.
-export type APITaskType = 'queue' | 'history'
-
-export enum TaskItemDisplayStatus {
+enum TaskItemDisplayStatus {
   Running = 'Running',
   Pending = 'Pending',
   Completed = 'Completed',
@@ -28,232 +32,74 @@ export enum TaskItemDisplayStatus {
   Cancelled = 'Cancelled'
 }
 
-export class ResultItemImpl {
-  filename: string
-  subfolder: string
-  type: string
-
-  nodeId: NodeId
-  // 'audio' | 'images' | ...
-  mediaType: string
-
-  // VHS output specific fields
-  format?: string
-  frame_rate?: number
-
-  constructor(obj: Record<string, any>) {
-    this.filename = obj.filename ?? ''
-    this.subfolder = obj.subfolder ?? ''
-    this.type = obj.type ?? ''
-
-    this.nodeId = obj.nodeId
-    this.mediaType = obj.mediaType
-
-    this.format = obj.format
-    this.frame_rate = obj.frame_rate
-  }
-
-  get urlParams(): URLSearchParams {
-    const params = new URLSearchParams()
-    params.set('filename', this.filename)
-    params.set('type', this.type)
-    params.set('subfolder', this.subfolder)
-
-    if (this.format) {
-      params.set('format', this.format)
-    }
-    if (this.frame_rate) {
-      params.set('frame_rate', this.frame_rate.toString())
-    }
-    return params
-  }
-
-  /**
-   * VHS advanced preview URL. `/viewvideo` endpoint is provided by VHS node.
-   *
-   * `/viewvideo` always returns a webm file.
-   */
-  get vhsAdvancedPreviewUrl(): string {
-    return api.apiURL('/viewvideo?' + this.urlParams)
-  }
-
-  get url(): string {
-    return api.apiURL('/view?' + this.urlParams)
-  }
-
-  get urlWithTimestamp(): string {
-    return `${this.url}&t=${+new Date()}`
-  }
-
-  get isVhsFormat(): boolean {
-    return !!this.format && !!this.frame_rate
-  }
-
-  get htmlVideoType(): string | undefined {
-    if (this.isWebm) {
-      return 'video/webm'
-    }
-    if (this.isMp4) {
-      return 'video/mp4'
-    }
-
-    if (this.isVhsFormat) {
-      if (this.format?.endsWith('webm')) {
-        return 'video/webm'
-      }
-      if (this.format?.endsWith('mp4')) {
-        return 'video/mp4'
-      }
-    }
-    return undefined
-  }
-
-  get htmlAudioType(): string | undefined {
-    if (this.isMp3) {
-      return 'audio/mpeg'
-    }
-    if (this.isWav) {
-      return 'audio/wav'
-    }
-    if (this.isOgg) {
-      return 'audio/ogg'
-    }
-    if (this.isFlac) {
-      return 'audio/flac'
-    }
-    return undefined
-  }
-
-  get isGif(): boolean {
-    return this.filename.endsWith('.gif')
-  }
-
-  get isWebp(): boolean {
-    return this.filename.endsWith('.webp')
-  }
-
-  get isWebm(): boolean {
-    return this.filename.endsWith('.webm')
-  }
-
-  get isMp4(): boolean {
-    return this.filename.endsWith('.mp4')
-  }
-
-  get isVideoBySuffix(): boolean {
-    return this.isWebm || this.isMp4
-  }
-
-  get isImageBySuffix(): boolean {
-    return this.isGif || this.isWebp
-  }
-
-  get isMp3(): boolean {
-    return this.filename.endsWith('.mp3')
-  }
-
-  get isWav(): boolean {
-    return this.filename.endsWith('.wav')
-  }
-
-  get isOgg(): boolean {
-    return this.filename.endsWith('.ogg')
-  }
-
-  get isFlac(): boolean {
-    return this.filename.endsWith('.flac')
-  }
-
-  get isAudioBySuffix(): boolean {
-    return this.isMp3 || this.isWav || this.isOgg || this.isFlac
-  }
-
-  get isVideo(): boolean {
-    const isVideoByType =
-      this.mediaType === 'video' || !!this.format?.startsWith('video/')
-    return (
-      this.isVideoBySuffix ||
-      (isVideoByType && !this.isImageBySuffix && !this.isAudioBySuffix)
-    )
-  }
-
-  get isImage(): boolean {
-    return (
-      this.isImageBySuffix ||
-      (this.mediaType === 'images' &&
-        !this.isVideoBySuffix &&
-        !this.isAudioBySuffix)
-    )
-  }
-
-  get isAudio(): boolean {
-    const isAudioByType =
-      this.mediaType === 'audio' || !!this.format?.startsWith('audio/')
-    return (
-      this.isAudioBySuffix ||
-      (isAudioByType && !this.isImageBySuffix && !this.isVideoBySuffix)
-    )
-  }
-
-  get supportsPreview(): boolean {
-    return this.isImage || this.isVideo || this.isAudio
+function toAugmentedPreviewOutput(
+  previewOutput: NonNullable<JobListItem['preview_output']>
+): AugmentedResultItem {
+  return {
+    ...previewOutput,
+    filename: previewOutput.filename ?? '',
+    subfolder: previewOutput.subfolder ?? ''
   }
 }
 
 export class TaskItemImpl {
-  readonly taskType: TaskType
-  readonly prompt: TaskPrompt
-  readonly status?: TaskStatus
+  readonly job: JobListItem
   readonly outputs: TaskOutput
-  readonly flatOutputs: ReadonlyArray<ResultItemImpl>
+  readonly flatOutputs: ReadonlyArray<AugmentedResultItem>
 
   constructor(
-    taskType: TaskType,
-    prompt: TaskPrompt,
-    status?: TaskStatus,
+    job: JobListItem,
     outputs?: TaskOutput,
-    flatOutputs?: ReadonlyArray<ResultItemImpl>
+    flatOutputs?: ReadonlyArray<AugmentedResultItem>
   ) {
-    this.taskType = taskType
-    this.prompt = prompt
-    this.status = status
-    // Remove animated outputs from the outputs object
-    // outputs.animated is an array of boolean values that indicates if the images
-    // array in the result are animated or not.
-    // The queueStore does not use this information.
-    // It is part of the legacy API response. We should redesign the backend API.
-    // https://github.com/Comfy-Org/ComfyUI_frontend/issues/2739
-    this.outputs = _.mapValues(outputs ?? {}, (nodeOutputs) =>
-      _.omit(nodeOutputs, 'animated')
-    )
-    this.flatOutputs = flatOutputs ?? this.calculateFlatOutputs()
+    this.job = job
+    // If no outputs provided but job has preview_output, create synthetic outputs
+    // using the real nodeId and mediaType from the backend response
+    const effectiveOutputs =
+      outputs ??
+      (job.preview_output
+        ? {
+            [job.preview_output.nodeId]: {
+              [job.preview_output.mediaType]: [job.preview_output]
+            }
+          }
+        : {})
+    this.outputs = effectiveOutputs
+    this.flatOutputs =
+      flatOutputs ??
+      (!outputs && job.preview_output?.mediaType === 'text'
+        ? [toAugmentedPreviewOutput(job.preview_output)]
+        : this.calculateFlatOutputs())
   }
 
-  calculateFlatOutputs(): ReadonlyArray<ResultItemImpl> {
-    if (!this.outputs) {
-      return []
-    }
-    return Object.entries(this.outputs).flatMap(([nodeId, nodeOutputs]) =>
-      Object.entries(nodeOutputs).flatMap(([mediaType, items]) =>
-        (items as ResultItem[]).map(
-          (item: ResultItem) =>
-            new ResultItemImpl({
-              ...item,
-              nodeId,
-              mediaType
-            })
-        )
-      )
-    )
+  calculateFlatOutputs(): ReadonlyArray<AugmentedResultItem> {
+    return parseTaskOutput(this.outputs)
   }
 
-  get previewOutput(): ResultItemImpl | undefined {
+  /** All outputs that support preview (images, videos, audio, 3D, text) */
+  get previewableOutputs(): readonly AugmentedResultItem[] {
+    return filterPreviewableResults(this.flatOutputs)
+  }
+
+  get previewOutput(): AugmentedResultItem | undefined {
+    const previewable = this.previewableOutputs
+    // Prefer the last saved media file (most recent result) over temp previews
     return (
-      this.flatOutputs.find(
-        // Prefer saved media files over the temp previews
-        (output) => output.type === 'output' && output.supportsPreview
-      ) ?? this.flatOutputs.find((output) => output.supportsPreview)
+      previewable.findLast((output) => output.type === 'output') ??
+      previewable.at(-1)
     )
+  }
+
+  // Derive taskType from job status
+  get taskType(): TaskType {
+    switch (this.job.status) {
+      case 'in_progress':
+        return 'Running'
+      case 'pending':
+        return 'Pending'
+      default:
+        return 'History'
+    }
   }
 
   get apiTaskType(): APITaskType {
@@ -267,49 +113,47 @@ export class TaskItemImpl {
   }
 
   get key() {
-    return this.promptId + this.displayStatus
+    return this.jobId + this.displayStatus
   }
 
-  get queueIndex() {
-    return this.prompt[0]
+  get jobId() {
+    return this.job.id
   }
 
-  get promptId() {
-    return this.prompt[1]
+  get outputsCount(): number | undefined {
+    return this.job.outputs_count ?? undefined
   }
 
-  get promptInputs() {
-    return this.prompt[2]
+  /** Absent on backends or jobs that predate this field. */
+  get previewableOutputsCount(): number | undefined {
+    return this.job.previewable_outputs_count ?? undefined
   }
 
-  get extraData() {
-    return this.prompt[3]
+  get status() {
+    return this.job.status
   }
 
-  get outputsToExecute() {
-    return this.prompt[4]
+  get errorMessage(): string | undefined {
+    return this.job.execution_error?.exception_message ?? undefined
   }
 
-  get extraPngInfo() {
-    return this.extraData.extra_pnginfo
+  get executionError() {
+    return this.job.execution_error ?? undefined
   }
 
-  get clientId() {
-    return this.extraData.client_id
+  get workflowId(): string | undefined {
+    return this.job.workflow_id ?? undefined
   }
 
-  get workflow(): ComfyWorkflowJSON | undefined {
-    return this.extraPngInfo?.workflow
+  get createTime(): number {
+    return this.job.create_time
   }
 
-  get messages() {
-    return this.status?.messages || []
-  }
-
-  get interrupted() {
-    return _.some(
-      this.messages,
-      (message) => message[0] === 'execution_interrupted'
+  get interrupted(): boolean {
+    return (
+      this.job.status === 'failed' &&
+      this.job.execution_error?.exception_type ===
+        'InterruptProcessingException'
     )
   }
 
@@ -322,42 +166,26 @@ export class TaskItemImpl {
   }
 
   get displayStatus(): TaskItemDisplayStatus {
-    switch (this.taskType) {
-      case 'Running':
+    switch (this.job.status) {
+      case 'in_progress':
         return TaskItemDisplayStatus.Running
-      case 'Pending':
+      case 'pending':
         return TaskItemDisplayStatus.Pending
-      case 'History':
-        if (this.interrupted) return TaskItemDisplayStatus.Cancelled
-
-        switch (this.status!.status_str) {
-          case 'success':
-            return TaskItemDisplayStatus.Completed
-          case 'error':
-            return TaskItemDisplayStatus.Failed
-        }
+      case 'completed':
+        return TaskItemDisplayStatus.Completed
+      case 'failed':
+        return TaskItemDisplayStatus.Failed
+      case 'cancelled':
+        return TaskItemDisplayStatus.Cancelled
     }
   }
 
   get executionStartTimestamp() {
-    const message = this.messages.find(
-      (message) => message[0] === 'execution_start'
-    )
-    return message ? message[1].timestamp : undefined
+    return this.job.execution_start_time ?? undefined
   }
 
   get executionEndTimestamp() {
-    const messages = this.messages.filter((message) =>
-      [
-        'execution_success',
-        'execution_interrupted',
-        'execution_error'
-      ].includes(message[0])
-    )
-    if (!messages.length) {
-      return undefined
-    }
-    return _.max(messages.map((message) => message[1].timestamp))
+    return this.job.execution_end_time ?? undefined
   }
 
   get executionTime() {
@@ -373,25 +201,56 @@ export class TaskItemImpl {
       : undefined
   }
 
+  /**
+   * Loads full outputs for tasks that only have preview data
+   * Returns a new TaskItemImpl with full outputs and execution status
+   */
+  public async loadFullOutputs(): Promise<TaskItemImpl> {
+    // Only load for history tasks (caller checks outputsCount > 1)
+    if (!this.isHistory) {
+      return this
+    }
+    const jobDetail = await getJobDetail(this.jobId)
+
+    if (!jobDetail?.outputs) {
+      return this
+    }
+
+    // Create new TaskItemImpl with full outputs
+    return new TaskItemImpl(this.job, jobDetail.outputs)
+  }
+
   public async loadWorkflow(app: ComfyApp) {
-    if (!this.workflow) {
+    if (!this.isHistory) {
       return
     }
-    await app.loadGraphData(toRaw(this.workflow))
-    if (this.outputs) {
-      const nodeOutputsStore = useNodeOutputStore()
-      const rawOutputs = toRaw(this.outputs)
-      for (const nodeExecutionId in rawOutputs) {
-        nodeOutputsStore.setNodeOutputsByExecutionId(
-          nodeExecutionId,
-          rawOutputs[nodeExecutionId]
-        )
-      }
-      useExtensionService().invokeExtensions(
-        'onNodeOutputsUpdated',
-        app.nodeOutputs
+
+    // Single fetch for both workflow and outputs (with caching)
+    const jobDetail = await getJobDetail(this.jobId)
+
+    const workflowData = await extractWorkflow(jobDetail)
+    if (!workflowData) {
+      return
+    }
+
+    await app.loadGraphData(toRaw(workflowData))
+
+    // Use full outputs from job detail, or fall back to existing outputs
+    const outputsToLoad = jobDetail?.outputs ?? this.outputs
+    const nodeOutputsStore = useNodeOutputStore()
+    const rawOutputs = toRaw(outputsToLoad)
+    for (const rawNodeExecutionId in rawOutputs) {
+      const nodeExecutionId = tryNormalizeNodeExecutionId(rawNodeExecutionId)
+      if (!nodeExecutionId) continue
+      nodeOutputsStore.setNodeOutputsByExecutionId(
+        nodeExecutionId,
+        rawOutputs[rawNodeExecutionId]
       )
     }
+    useExtensionServiceAccess().invokeExtensions(
+      'onNodeOutputsUpdated',
+      app.nodeOutputs
+    )
   }
 
   public flatten(): TaskItemImpl[] {
@@ -400,17 +259,12 @@ export class TaskItemImpl {
     }
 
     return this.flatOutputs.map(
-      (output: ResultItemImpl, i: number) =>
+      (output: AugmentedResultItem, i: number) =>
         new TaskItemImpl(
-          this.taskType,
-          [
-            this.queueIndex,
-            `${this.promptId}-${i}`,
-            this.promptInputs,
-            this.extraData,
-            this.outputsToExecute
-          ],
-          this.status,
+          {
+            ...this.job,
+            id: `${this.jobId}-${i}`
+          },
           {
             [output.nodeId]: {
               [output.mediaType]: [output]
@@ -423,11 +277,22 @@ export class TaskItemImpl {
 }
 
 export const useQueueStore = defineStore('queue', () => {
-  const runningTasks = ref<TaskItemImpl[]>([])
-  const pendingTasks = ref<TaskItemImpl[]>([])
-  const historyTasks = ref<TaskItemImpl[]>([])
+  // Use shallowRef because TaskItemImpl instances are immutable and arrays are
+  // replaced entirely (not mutated), so deep reactivity would waste performance
+  const runningTasks = shallowRef<TaskItemImpl[]>([])
+  const pendingTasks = shallowRef<TaskItemImpl[]>([])
+  const historyTasks = shallowRef<TaskItemImpl[]>([])
+  const hasFetchedHistorySnapshot = ref(false)
   const maxHistoryItems = ref(64)
   const isLoading = ref(false)
+
+  // Single-flight coalescing: at most one fetch in flight at a time.
+  // If update() is called while a fetch is running, the call is coalesced
+  // and a single re-fetch fires after the current one completes.
+  // This prevents both request spam and UI starvation (where a rapid stream
+  // of calls causes every response to be discarded by a stale-request guard).
+  const updateState = { inFlight: false, dirty: false }
+  const hasDirtyUpdate = () => updateState.dirty
 
   const tasks = computed<TaskItemImpl[]>(
     () =>
@@ -442,53 +307,118 @@ export const useQueueStore = defineStore('queue', () => {
     tasks.value.flatMap((task: TaskItemImpl) => task.flatten())
   )
 
-  const lastHistoryQueueIndex = computed<number>(() =>
-    historyTasks.value.length ? historyTasks.value[0].queueIndex : -1
+  const lastJobHistoryPriority = computed<number>(() =>
+    historyTasks.value.length ? historyTasks.value[0].job.priority : -1
   )
 
   const hasPendingTasks = computed<boolean>(() => pendingTasks.value.length > 0)
+  const activeJobsCount = computed(
+    () => pendingTasks.value.length + runningTasks.value.length
+  )
+
+  let currentUpdate: Promise<void> = Promise.resolve()
 
   const update = async () => {
+    if (updateState.inFlight) {
+      updateState.dirty = true
+      return
+    }
+    currentUpdate = fetchQueueAndHistory()
+    await currentUpdate
+  }
+
+  /** Like `update()`, but a coalesced call also waits for the trailing re-fetch. */
+  async function updateFresh() {
+    if (!updateState.inFlight) return update()
+    updateState.dirty = true
+    await currentUpdate
+    await currentUpdate
+  }
+
+  async function fetchQueueAndHistory() {
+    updateState.inFlight = true
+    updateState.dirty = false
     isLoading.value = true
     try {
-      const [queue, history] = await Promise.all([
-        api.getQueue(),
+      const [queueResult, historyResult] = await Promise.allSettled([
+        api.getQueue({ throwOnError: true }),
         api.getHistory(maxHistoryItems.value)
       ])
 
-      const toClassAll = (tasks: TaskItem[]): TaskItemImpl[] =>
-        tasks
-          .map(
-            (task: TaskItem) =>
-              new TaskItemImpl(
-                task.taskType,
-                task.prompt,
-                // status and outputs only exist on history tasks
-                'status' in task ? task.status : undefined,
-                'outputs' in task ? task.outputs : undefined
-              )
-          )
-          .sort((a, b) => b.queueIndex - a.queueIndex)
+      if (queueResult.status === 'fulfilled') {
+        const queue = queueResult.value
+        // API returns pre-sorted data (sort_by=create_time&order=desc)
+        runningTasks.value = queue.Running.map((job) => new TaskItemImpl(job))
+        pendingTasks.value = queue.Pending.map((job) => new TaskItemImpl(job))
 
-      runningTasks.value = toClassAll(queue.Running)
-      pendingTasks.value = toClassAll(queue.Pending)
+        const appearedTasks = [...pendingTasks.value, ...runningTasks.value]
+        const executionStore = useExecutionStore()
+        appearedTasks.forEach((task) => {
+          const jobIdString = task.jobId
+          const workflowId = task.workflowId
+          if (workflowId && jobIdString) {
+            executionStore.registerJobWorkflowIdMapping(jobIdString, workflowId)
+          }
+        })
 
-      const allIndex = new Set<number>(
-        history.History.map((item: TaskItem) => item.prompt[0])
-      )
-      const newHistoryItems = toClassAll(
-        history.History.filter(
-          (item) => item.prompt[0] > lastHistoryQueueIndex.value
+        const activeJobIds = new Set([
+          ...queue.Running.map((j) => j.id),
+          ...queue.Pending.map((j) => j.id)
+        ])
+        executionStore.reconcileInitializingJobs(activeJobIds)
+        useJobModelDownloadStore().reconcileActiveJobs(activeJobIds)
+      } else {
+        console.error('Failed to fetch queue:', queueResult.reason)
+      }
+
+      if (historyResult.status === 'fulfilled') {
+        const history = historyResult.value
+        const currentHistory = toValue(historyTasks)
+
+        // Sort by create_time descending and limit to maxItems
+        const sortedHistory = [...history]
+          .sort((a, b) => b.create_time - a.create_time)
+          .slice(0, toValue(maxHistoryItems))
+
+        // Reuse existing TaskItemImpl instances or create new
+        // Must recreate if outputs_count changed (e.g., API started returning it)
+        const existingByJobId = new Map(
+          currentHistory.map((impl) => [impl.jobId, impl])
         )
-      )
-      const existingHistoryItems = historyTasks.value.filter((item) =>
-        allIndex.has(item.queueIndex)
-      )
-      historyTasks.value = [...newHistoryItems, ...existingHistoryItems]
-        .slice(0, maxHistoryItems.value)
-        .sort((a, b) => b.queueIndex - a.queueIndex)
+
+        const nextHistoryTasks = sortedHistory.map((job) => {
+          const existing = existingByJobId.get(job.id)
+          if (!existing) return new TaskItemImpl(job)
+          // Recreate if outputs_count changed to ensure lazy loading works
+          if (
+            existing.outputsCount !== (job.outputs_count ?? undefined) ||
+            existing.previewableOutputsCount !==
+              (job.previewable_outputs_count ?? undefined)
+          ) {
+            return new TaskItemImpl(job)
+          }
+          return existing
+        })
+
+        const isHistoryUnchanged =
+          nextHistoryTasks.length === currentHistory.length &&
+          nextHistoryTasks.every(
+            (task, index) => task === currentHistory[index]
+          )
+
+        if (!isHistoryUnchanged) {
+          historyTasks.value = nextHistoryTasks
+        }
+        hasFetchedHistorySnapshot.value = true
+      } else {
+        console.error('Failed to fetch history:', historyResult.reason)
+      }
     } finally {
       isLoading.value = false
+      updateState.inFlight = false
+      if (hasDirtyUpdate()) {
+        void update()
+      }
     }
   }
 
@@ -503,7 +433,7 @@ export const useQueueStore = defineStore('queue', () => {
   }
 
   const deleteTask = async (task: TaskItemImpl) => {
-    await api.deleteItem(task.apiTaskType, task.promptId)
+    await api.deleteItem(task.apiTaskType, task.jobId)
     await update()
   }
 
@@ -511,15 +441,18 @@ export const useQueueStore = defineStore('queue', () => {
     runningTasks,
     pendingTasks,
     historyTasks,
+    hasFetchedHistorySnapshot,
     maxHistoryItems,
     isLoading,
 
     tasks,
     flatTasks,
-    lastHistoryQueueIndex,
+    lastJobHistoryPriority,
     hasPendingTasks,
+    activeJobsCount,
 
     update,
+    updateFresh,
     clear,
     delete: deleteTask
   }
@@ -532,18 +465,25 @@ export const useQueuePendingTaskCountStore = defineStore(
       count: 0
     }),
     actions: {
-      update(e: CustomEvent<StatusWsMessageStatus>) {
-        this.count = e.detail?.exec_info?.queue_remaining || 0
+      update(e: CustomEvent<StatusWsMessageStatus | null>) {
+        const queueRemaining = e.detail?.exec_info?.queue_remaining
+        if (queueRemaining != null) this.count = queueRemaining
       }
     }
   }
 )
 
-export type AutoQueueMode = 'disabled' | 'instant' | 'change'
+export const useQueueUIStore = defineStore('queueUIStore', () => {
+  const settingStore = useSettingStore()
 
-export const useQueueSettingsStore = defineStore('queueSettingsStore', {
-  state: () => ({
-    mode: 'disabled' as AutoQueueMode,
-    batchCount: 1
+  const isOverlayExpanded = computed({
+    get: () => settingStore.get('Comfy.Queue.History.Expanded'),
+    set: (value) => settingStore.set('Comfy.Queue.History.Expanded', value)
   })
+
+  function toggleOverlay() {
+    isOverlayExpanded.value = !isOverlayExpanded.value
+  }
+
+  return { isOverlayExpanded, toggleOverlay }
 })

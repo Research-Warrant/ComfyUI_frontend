@@ -1,8 +1,9 @@
+import { useChainCallback } from '@/composables/functional/useChainCallback'
 import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
-import type { IWidget } from '@/lib/litegraph/src/types/widgets'
-import { ANIM_PREVIEW_WIDGET } from '@/scripts/app'
-import { createImageHost } from '@/scripts/ui/imagePreview'
-import { fitDimensionsToNodeWidth } from '@/utils/imageUtil'
+import { useCanvasInteractions } from '@/renderer/core/canvas/useCanvasInteractions'
+import { isDOMWidget } from '@/scripts/domWidget'
+
+export const ANIM_PREVIEW_WIDGET = '$$comfy_animation_preview'
 
 /**
  * Composable for handling animated image previews in nodes
@@ -20,38 +21,48 @@ export function useNodeAnimatedImage() {
       (w) => w.name === ANIM_PREVIEW_WIDGET
     )
 
+    node.imgs[0].classList.value = 'block size-full object-contain'
     if (widgetIdx > -1) {
       // Replace content in existing widget
-      const widget = node.widgets[widgetIdx] as IWidget & {
-        options: { host: ReturnType<typeof createImageHost> }
-      }
-      widget.options.host.updateImages(node.imgs)
+      const widget = node.widgets[widgetIdx]
+      if (!isDOMWidget(widget)) return
+      widget.element.replaceChildren(node.imgs[0])
     } else {
       // Create new widget
-      const host = createImageHost(node)
-      // @ts-expect-error host is not a standard DOM widget option.
-      const widget = node.addDOMWidget(ANIM_PREVIEW_WIDGET, 'img', host.el, {
-        host,
-        // @ts-expect-error `getHeight` of image host returns void instead of number.
-        getHeight: host.getHeight,
-        onDraw: host.onDraw,
-        hideOnZoom: false
-      }) as IWidget & {
-        options: { host: ReturnType<typeof createImageHost> }
-      }
+      const element = document.createElement('div')
+      element.appendChild(node.imgs[0])
+      const widget = node.addDOMWidget(ANIM_PREVIEW_WIDGET, 'img', element, {
+        hideOnZoom: false,
+        surfaces: { canvas: 'shown', vueNode: 'never', panel: 'never' }
+      })
+      node.overIndex = 0
+
+      // Add event listeners for canvas interactions
+      const {
+        handleWheel,
+        handlePointerDown,
+        handlePointerMove,
+        handlePointerUp,
+        forwardEventToCanvas
+      } = useCanvasInteractions()
+      node.imgs[0].style.pointerEvents = 'none'
+      const controller = new AbortController()
+      const { signal } = controller
+      element.addEventListener('wheel', handleWheel, { signal })
+      element.addEventListener('pointermove', handlePointerMove, { signal })
+      element.addEventListener('pointerup', handlePointerUp, { signal })
+      element.addEventListener(
+        'pointerdown',
+        (e) =>
+          e.button !== 2 ? handlePointerDown(e) : forwardEventToCanvas(e),
+        { capture: true, signal }
+      )
+
+      widget.onRemove = useChainCallback(widget.onRemove, () => {
+        controller.abort()
+      })
       widget.serialize = false
       widget.serializeValue = () => undefined
-      widget.options.host.updateImages(node.imgs)
-      widget.computeLayoutSize = () => {
-        const img = widget.options.host.getCurrentImage()
-        if (!img) return { minHeight: 0, minWidth: 0 }
-
-        return fitDimensionsToNodeWidth(
-          img.naturalWidth,
-          img.naturalHeight,
-          node.size?.[0] || 0
-        )
-      }
     }
   }
 

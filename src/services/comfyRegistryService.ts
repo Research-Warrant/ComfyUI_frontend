@@ -1,4 +1,5 @@
-import axios, { AxiosError, AxiosResponse } from 'axios'
+import type { AxiosError, AxiosResponse } from 'axios'
+import axios from 'axios'
 import { ref } from 'vue'
 
 import type { components, operations } from '@/types/comfyRegistryTypes'
@@ -44,19 +45,19 @@ export const useComfyRegistryService = () => {
 
       switch (status) {
         case 400:
-          return `Bad request: ${data?.message || 'Invalid input'}`
+          return `Bad request: ${data.message || 'Invalid input'}`
         case 401:
           return 'Unauthorized: Authentication required'
         case 403:
-          return `Forbidden: ${data?.message || 'Access denied'}`
+          return `Forbidden: ${data.message || 'Access denied'}`
         case 404:
-          return `Not found: ${data?.message || 'Resource not found'}`
+          return `Not found: ${data.message || 'Resource not found'}`
         case 409:
-          return `Conflict: ${data?.message || 'Resource conflict'}`
+          return `Conflict: ${data.message || 'Resource conflict'}`
         case 500:
-          return `Server error: ${data?.message || 'Internal server error'}`
+          return `Server error: ${data.message || 'Internal server error'}`
         default:
-          return `${context}: ${data?.message || axiosError.message}`
+          return `${context}: ${data.message || axiosError.message}`
       }
     }
 
@@ -340,9 +341,14 @@ export const useComfyRegistryService = () => {
    * ```
    */
   const inferPackFromNodeName = async (
-    nodeName: operations['getNodeByComfyNodeName']['parameters']['path']['comfyNodeName'],
+    nodeName:
+      | operations['getNodeByComfyNodeName']['parameters']['path']['comfyNodeName']
+      | null
+      | undefined,
     signal?: AbortSignal
   ) => {
+    if (!nodeName || nodeName === 'undefined') return null
+
     const endpoint = `/comfy-nodes/${nodeName}/node`
     const errorContext = 'Failed to infer pack from comfy node name'
     const routeSpecificErrors = {
@@ -352,6 +358,55 @@ export const useComfyRegistryService = () => {
     return executeApiRequest(
       () =>
         registryApiClient.get<components['schemas']['Node']>(endpoint, {
+          signal
+        }),
+      errorContext,
+      routeSpecificErrors
+    )
+  }
+
+  /**
+   * Get multiple pack versions in a single bulk request.
+   * This is more efficient than making individual requests for each pack version.
+   *
+   * @param nodeVersions - Array of node ID and version pairs to retrieve
+   * @param signal - Optional AbortSignal for request cancellation
+   * @returns Bulk response containing the requested node versions or null on error
+   *
+   * @example
+   * ```typescript
+   * const versions = await getBulkNodeVersions([
+   *   { node_id: 'ComfyUI-Manager', version: '1.0.0' },
+   *   { node_id: 'ComfyUI-Impact-Pack', version: '2.0.0' }
+   * ])
+   * if (versions) {
+   *   versions.node_versions.forEach(result => {
+   *     if (result.status === 'success' && result.node_version) {
+   *       console.log(`Retrieved ${result.identifier.node_id}@${result.identifier.version}`)
+   *     }
+   *   })
+   * }
+   * ```
+   */
+  const getBulkNodeVersions = async (
+    nodeVersions: components['schemas']['NodeVersionIdentifier'][],
+    signal?: AbortSignal
+  ) => {
+    const endpoint = '/bulk/nodes/versions'
+    const errorContext = 'Failed to get bulk node versions'
+    const routeSpecificErrors = {
+      400: 'Bad request: Invalid node version identifiers provided'
+    }
+
+    const requestBody: components['schemas']['BulkNodeVersionsRequest'] = {
+      node_versions: nodeVersions
+    }
+
+    return executeApiRequest(
+      () =>
+        registryApiClient.post<
+          components['schemas']['BulkNodeVersionsResponse']
+        >(endpoint, requestBody, {
           signal
         }),
       errorContext,
@@ -372,6 +427,7 @@ export const useComfyRegistryService = () => {
     listPacksForPublisher,
     getNodeDefs,
     postPackReview,
-    inferPackFromNodeName
+    inferPackFromNodeName,
+    getBulkNodeVersions
   }
 }

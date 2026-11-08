@@ -1,32 +1,57 @@
 <template>
-  <router-view />
-  <ProgressSpinner
-    v-if="isLoading"
-    class="absolute inset-0 flex justify-center items-center h-[unset]"
+  <TooltipProvider>
+    <router-view />
+    <GlobalDialog />
+    <SessionReconnecting v-if="isCloud" />
+  </TooltipProvider>
+  <div
+    v-show="isLoading"
+    data-testid="app-loading-overlay"
+    class="fixed inset-0 z-blocking bg-black/10"
+    :aria-busy="isLoading"
   />
-  <GlobalDialog />
-  <BlockUI full-screen :blocked="isLoading" />
 </template>
 
 <script setup lang="ts">
 import { useEventListener } from '@vueuse/core'
-import BlockUI from 'primevue/blockui'
-import ProgressSpinner from 'primevue/progressspinner'
 import { computed, onMounted, watch } from 'vue'
 
 import GlobalDialog from '@/components/dialog/GlobalDialog.vue'
+import { useAgentExtensionNotices } from '@/composables/useAgentExtensionNotices'
 import config from '@/config'
+import TooltipProvider from '@comfyorg/design-system/tooltip/TooltipProvider'
+import SessionReconnecting from '@/platform/auth/session/components/SessionReconnecting.vue'
+import { isCloud, isDesktop } from '@/platform/distribution/types'
+import {
+  reportPreloadError,
+  reportPreloadErrorUnlessExtensionImport,
+  reportResourceLoadError
+} from '@/platform/telemetry/assetLoadErrorReporting'
+import { app } from '@/scripts/app'
+import { registerExtensionDialogService } from '@/services/dialogService'
+import { createExtensionDialogService } from '@/services/extensionDialogService'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
+import { electronAPI } from '@/utils/envUtil'
+import { parsePreloadError } from '@/utils/preloadErrorUtil'
+import { useConflictDetection } from '@/platform/customNodes/manager/composables/useConflictDetection'
 
-import { electronAPI, isElectron } from './utils/envUtil'
-
+registerExtensionDialogService(createExtensionDialogService())
 const workspaceStore = useWorkspaceStore()
+app.extensionManager = useWorkspaceStore()
+
+const conflictDetection = useConflictDetection()
+useAgentExtensionNotices()
 const isLoading = computed<boolean>(() => workspaceStore.spinner)
-const handleKey = (e: KeyboardEvent) => {
-  workspaceStore.shiftDown = e.shiftKey
-}
-useEventListener(window, 'keydown', handleKey)
-useEventListener(window, 'keyup', handleKey)
+
+watch(
+  isLoading,
+  (loading, prevLoading) => {
+    if (prevLoading && !loading) {
+      document.getElementById('splash-loader')?.remove()
+    }
+  },
+  { flush: 'post' }
+)
 
 const showContextMenu = (event: MouseEvent) => {
   const { target } = event
@@ -46,12 +71,49 @@ watch(isLoading, (newValue) => {
 })
 
 onMounted(() => {
-  // @ts-expect-error fixme ts strict error
   window['__COMFYUI_FRONTEND_VERSION__'] = config.app_version
-  console.log('ComfyUI Front-end version:', config.app_version)
 
-  if (isElectron()) {
+  if (isDesktop) {
     document.addEventListener('contextmenu', showContextMenu)
   }
+
+  // Handle preload errors that occur during dynamic imports (e.g., stale chunks after deployment)
+  // See: https://vite.dev/guide/build#load-error-handling
+  useEventListener(window, 'vite:preloadError', (event) => {
+    if (parsePreloadError(event.payload).url === null) {
+      reportPreloadErrorUnlessExtensionImport(event.payload)
+      return
+    }
+    event.preventDefault()
+    reportPreloadError(event.payload)
+    // No toast: third-party custom node extensions frequently trigger this
+    // (e.g., bare "vue" imports, wrong relative paths to scripts/app.js, missing
+    // core dependencies). These are plugin bugs, not ComfyUI core failures, but
+    // the generic error message alarms users and offers no actionable guidance.
+    // The reporter above still logs the details for developers to debug.
+  })
+
+  // Capture resource load failures (CSS, scripts) in non-localhost distributions
+  if (__DISTRIBUTION__ !== 'localhost') {
+    window.addEventListener(
+      'error',
+      (event) => {
+        const target = event.target
+        if (target instanceof HTMLScriptElement) {
+          reportResourceLoadError(target.src, 'script')
+        } else if (
+          target instanceof HTMLLinkElement &&
+          target.rel === 'stylesheet'
+        ) {
+          reportResourceLoadError(target.href, 'link')
+        }
+      },
+      true
+    )
+  }
+
+  // Initialize conflict detection in background
+  // This runs async and doesn't block UI setup
+  void conflictDetection.initializeConflictDetection()
 })
 </script>

@@ -1,11 +1,14 @@
 import type {
   HasBoundingRect,
-  Point,
-  ReadOnlyPoint,
+  PointTuple as Point,
   ReadOnlyRect,
   Rect
-} from './interfaces'
-import { Alignment, LinkDirection, hasFlag } from './types/globalEnums'
+} from '@comfyorg/shared-frontend-utils/geometry'
+import {
+  Alignment,
+  LinkDirection,
+  hasFlag
+} from '@comfyorg/graph-model/globalEnums'
 
 /**
  * Calculates the distance between two points (2D vector)
@@ -13,7 +16,7 @@ import { Alignment, LinkDirection, hasFlag } from './types/globalEnums'
  * @param b Point b as `x, y`
  * @returns Distance between point {@link a} & {@link b}
  */
-export function distance(a: ReadOnlyPoint, b: ReadOnlyPoint): number {
+export function distance(a: Readonly<Point>, b: Readonly<Point>): number {
   return Math.sqrt(
     (b[0] - a[0]) * (b[0] - a[0]) + (b[1] - a[1]) * (b[1] - a[1])
   )
@@ -62,7 +65,7 @@ export function isInRectangle(
  * @returns `true` if the point is inside the rect, otherwise `false`
  */
 export function isPointInRect(
-  point: ReadOnlyPoint,
+  point: Readonly<Point>,
   rect: ReadOnlyRect
 ): boolean {
   return (
@@ -289,8 +292,8 @@ export function rotateLink(
  * the right
  */
 export function getOrientation(
-  lineStart: ReadOnlyPoint,
-  lineEnd: ReadOnlyPoint,
+  lineStart: Readonly<Point>,
+  lineEnd: Readonly<Point>,
   x: number,
   y: number
 ): number {
@@ -310,10 +313,10 @@ export function getOrientation(
  */
 export function findPointOnCurve(
   out: Point,
-  a: ReadOnlyPoint,
-  b: ReadOnlyPoint,
-  controlA: ReadOnlyPoint,
-  controlB: ReadOnlyPoint,
+  a: Readonly<Point>,
+  b: Readonly<Point>,
+  controlA: Readonly<Point>,
+  controlB: Readonly<Point>,
   t: number = 0.5
 ): void {
   const iT = 1 - t
@@ -331,7 +334,7 @@ export function createBounds(
   objects: Iterable<HasBoundingRect>,
   padding: number = 10
 ): ReadOnlyRect | null {
-  const bounds = new Float32Array([Infinity, Infinity, -Infinity, -Infinity])
+  const bounds: Rect = [Infinity, Infinity, -Infinity, -Infinity]
 
   for (const obj of objects) {
     const rect = obj.boundingRect
@@ -357,11 +360,40 @@ export function createBounds(
  * @returns `true` if snapTo is truthy, otherwise `false`
  * @remarks `NaN` propagates through this function and does not affect return value.
  */
-export function snapPoint(pos: Point | Rect, snapTo: number): boolean {
+export function snapPoint(
+  pos: Point | Rect,
+  snapTo: number,
+  method: 'round' | 'ceil' | 'floor' = 'round'
+): boolean {
   if (!snapTo) return false
 
-  pos[0] = snapTo * Math.round(pos[0] / snapTo)
-  pos[1] = snapTo * Math.round(pos[1] / snapTo)
+  pos[0] = snapTo * Math[method](pos[0] / snapTo)
+  pos[1] = snapTo * Math[method](pos[1] / snapTo)
+  return true
+}
+
+/**
+ * Expands a {@link Rect} outwards so that all four edges lie on a grid of size
+ * {@link snapTo}.
+ *
+ * Unlike {@link snapPoint}, the rect is only ever grown, never shrunk, so
+ * anything it contained before the call is still contained afterwards.
+ * @param rect The rect that will be expanded, modified in place
+ * @param snapTo The grid size to expand out to (multiples thereof)
+ * @returns `true` if snapTo is truthy, otherwise `false`
+ */
+export function expandRectToGrid(rect: Rect, snapTo: number): boolean {
+  if (!snapTo) return false
+
+  const right = snapTo * Math.ceil((rect[0] + rect[2]) / snapTo)
+  const bottom = snapTo * Math.ceil((rect[1] + rect[3]) / snapTo)
+  const left = snapTo * Math.floor(rect[0] / snapTo)
+  const top = snapTo * Math.floor(rect[1] / snapTo)
+
+  rect[0] = left
+  rect[1] = top
+  rect[2] = right - left
+  rect[3] = bottom - top
   return true
 }
 
@@ -382,7 +414,7 @@ export function alignToContainer(
   rect: Rect,
   anchors: Alignment,
   [containerX, containerY, containerWidth, containerHeight]: ReadOnlyRect,
-  [insetX, insetY]: ReadOnlyPoint = [0, 0]
+  [insetX, insetY]: Readonly<Point> = [0, 0]
 ): Rect {
   if (hasFlag(anchors, Alignment.Left)) {
     // Left
@@ -425,7 +457,7 @@ export function alignOutsideContainer(
   rect: Rect,
   anchors: Alignment,
   [otherX, otherY, otherWidth, otherHeight]: ReadOnlyRect,
-  [outsetX, outsetY]: ReadOnlyPoint = [0, 0]
+  [outsetX, outsetY]: Readonly<Point> = [0, 0]
 ): Rect {
   if (hasFlag(anchors, Alignment.Left)) {
     // Left

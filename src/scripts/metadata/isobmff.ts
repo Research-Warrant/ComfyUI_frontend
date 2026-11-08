@@ -1,13 +1,14 @@
-import {
+import type {
   ComfyApiWorkflow,
   ComfyWorkflowJSON
-} from '@/schemas/comfyWorkflowSchema'
-import {
-  ASCII,
+} from '@comfyorg/graph-model/workflowSchema'
+import { ASCII, ComfyMetadataTags } from '@/types/metadataTypes'
+import type {
   ComfyMetadata,
-  ComfyMetadataTags,
   IsobmffBoxContentRange
 } from '@/types/metadataTypes'
+import { readFileAsArrayBuffer } from '@/utils/fileUtil'
+import { parseJsonWithNonFinite } from '@/utils/jsonUtil'
 
 // Set max read high, as atoms are stored near end of file
 // while search is made to be efficient.
@@ -72,7 +73,11 @@ const findIsobmffBoxByType = (
   return null
 }
 
-const extractJson = (data: Uint8Array, start: number, end: number): any => {
+const extractJson = (
+  data: Uint8Array,
+  start: number,
+  end: number
+): ComfyWorkflowJSON | ComfyApiWorkflow | null => {
   let jsonStart = start
   while (jsonStart < end && data[jsonStart] !== ASCII.OPEN_BRACE) {
     jsonStart++
@@ -81,7 +86,9 @@ const extractJson = (data: Uint8Array, start: number, end: number): any => {
 
   try {
     const jsonText = new TextDecoder().decode(data.slice(jsonStart, end))
-    return JSON.parse(jsonText)
+    return parseJsonWithNonFinite<ComfyWorkflowJSON | ComfyApiWorkflow>(
+      jsonText
+    )
   } catch {
     return null
   }
@@ -133,7 +140,7 @@ const extractMetadataValueFromDataBox = (
     lowerKeyName === ComfyMetadataTags.PROMPT.toLowerCase() ||
     lowerKeyName === ComfyMetadataTags.WORKFLOW.toLowerCase()
   ) {
-    return extractJson(data, valueStart, dataBoxEnd) || null
+    return extractJson(data, valueStart, dataBoxEnd)
   }
   return null
 }
@@ -187,23 +194,23 @@ const parseIlstBox = (
 }
 
 const findUserDataBox = (data: Uint8Array): IsobmffBoxContentRange => {
-  let userDataBox: IsobmffBoxContentRange = null
-
   // Metadata can be in 'udta' at top level or inside 'moov'
-  userDataBox = findIsobmffBoxByType(data, 0, data.length, BOX_TYPES.USER_DATA)
+  const topLevelBox = findIsobmffBoxByType(
+    data,
+    0,
+    data.length,
+    BOX_TYPES.USER_DATA
+  )
+  if (topLevelBox) return topLevelBox
 
-  if (!userDataBox) {
-    const moovBox = findIsobmffBoxByType(data, 0, data.length, BOX_TYPES.MOVIE)
-    if (moovBox) {
-      userDataBox = findIsobmffBoxByType(
-        data,
-        moovBox.start,
-        moovBox.end,
-        BOX_TYPES.USER_DATA
-      )
-    }
-  }
-  return userDataBox
+  const moovBox = findIsobmffBoxByType(data, 0, data.length, BOX_TYPES.MOVIE)
+  if (!moovBox) return null
+  return findIsobmffBoxByType(
+    data,
+    moovBox.start,
+    moovBox.end,
+    BOX_TYPES.USER_DATA
+  )
 }
 
 const parseIsobmffMetadata = (data: Uint8Array): ComfyMetadata => {
@@ -249,27 +256,14 @@ const parseIsobmffMetadata = (data: Uint8Array): ComfyMetadata => {
  * (e.g., MP4, MOV) by parsing the `udta.meta.keys` and `udta.meta.ilst` boxes.
  * @param file - The file to extract metadata from.
  */
-export function getFromIsobmffFile(file: File): Promise<ComfyMetadata> {
-  return new Promise<ComfyMetadata>((resolve) => {
-    const reader = new FileReader()
-    reader.onload = (event: ProgressEvent<FileReader>) => {
-      if (!event.target?.result) {
-        resolve({})
-        return
-      }
+export async function getFromIsobmffFile(file: File): Promise<ComfyMetadata> {
+  const buffer = await readFileAsArrayBuffer(file, MAX_READ_BYTES)
+  if (!buffer) return {}
 
-      try {
-        const data = new Uint8Array(event.target.result as ArrayBuffer)
-        resolve(parseIsobmffMetadata(data))
-      } catch (e) {
-        console.error('Parser: Error parsing ISOBMFF metadata:', e)
-        resolve({})
-      }
-    }
-    reader.onerror = (err) => {
-      console.error('FileReader: Error reading ISOBMFF file:', err)
-      resolve({})
-    }
-    reader.readAsArrayBuffer(file.slice(0, MAX_READ_BYTES))
-  })
+  try {
+    return parseIsobmffMetadata(new Uint8Array(buffer))
+  } catch (e) {
+    console.error('Parser: Error parsing ISOBMFF metadata:', e)
+    return {}
+  }
 }

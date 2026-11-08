@@ -1,16 +1,19 @@
-import _ from 'es-toolkit/compat'
+import { clone } from 'es-toolkit/compat'
 import { defineStore } from 'pinia'
 import { computed } from 'vue'
 
-import type { BookmarkCustomization } from '@/schemas/apiSchema'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import type { BookmarkCustomization } from '@comfyorg/settings-core/types'
 import type { TreeNode } from '@/types/treeExplorerTypes'
 
-import { useNodeDefStore } from './nodeDefStore'
-import { ComfyNodeDefImpl, createDummyFolderNodeDef } from './nodeDefStore'
-import { buildNodeDefTree } from './nodeDefStore'
-import { useSettingStore } from './settingStore'
+import {
+  buildNodeDefTree,
+  createDummyFolderNodeDef,
+  useNodeDefStore
+} from './nodeDefStore'
+import type { ComfyNodeDefImpl } from '@/core/graph/nodeDef/ComfyNodeDefImpl'
 
-export const BOOKMARK_SETTING_ID = 'Comfy.NodeLibrary.Bookmarks.V2'
+const BOOKMARK_SETTING_ID = 'Comfy.NodeLibrary.Bookmarks.V2'
 
 export const useNodeBookmarkStore = defineStore('nodeBookmark', () => {
   const settingStore = useSettingStore()
@@ -21,7 +24,7 @@ export const useNodeBookmarkStore = defineStore('nodeBookmark', () => {
 
   const bookmarksSet = computed<Set<string>>(() => new Set(bookmarks.value))
 
-  const bookmarkedRoot = computed<TreeNode>(() =>
+  const bookmarkedRoot = computed<TreeNode<ComfyNodeDefImpl>>(() =>
     buildBookmarkTree(bookmarks.value)
   )
 
@@ -50,11 +53,9 @@ export const useNodeBookmarkStore = defineStore('nodeBookmark', () => {
         const parts = bookmark.split('/')
         const name = parts.pop() ?? ''
         const category = parts.join('/')
-        const srcNodeDef = nodeDefStore.nodeDefsByName[name]
-        if (!srcNodeDef) {
-          return null
-        }
-        const nodeDef = _.clone(srcNodeDef)
+        const srcNodeDef = nodeDefStore.getNodeDefByName(name)
+        if (!srcNodeDef) return null
+        const nodeDef = clone(srcNodeDef)
         nodeDef.category = category
         return nodeDef
       })
@@ -140,7 +141,10 @@ export const useNodeBookmarkStore = defineStore('nodeBookmark', () => {
     nodePath: string,
     customization: BookmarkCustomization
   ) => {
-    const currentCustomization = bookmarksCustomization.value[nodePath] || {}
+    const currentCustomization =
+      nodePath in bookmarksCustomization.value
+        ? bookmarksCustomization.value[nodePath]
+        : {}
     const newCustomization = { ...currentCustomization, ...customization }
 
     // Remove attributes that are set to default values
@@ -174,7 +178,7 @@ export const useNodeBookmarkStore = defineStore('nodeBookmark', () => {
     newNodePath: string
   ) => {
     const updatedCustomization = { ...bookmarksCustomization.value }
-    if (updatedCustomization[oldNodePath]) {
+    if (oldNodePath in updatedCustomization) {
       updatedCustomization[newNodePath] = updatedCustomization[oldNodePath]
       delete updatedCustomization[oldNodePath]
     }

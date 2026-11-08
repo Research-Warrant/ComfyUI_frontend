@@ -1,30 +1,32 @@
 <template>
   <div
-    class="font-sans w-screen h-screen flex flex-col"
-    :class="[
-      dark
-        ? 'text-neutral-300 bg-neutral-900 dark-theme'
-        : 'text-neutral-900 bg-neutral-300'
-    ]"
+    class="flex h-svh w-screen flex-col font-sans"
+    :class="
+      cn(
+        dark
+          ? 'bg-neutral-900 text-neutral-300'
+          : 'bg-neutral-300 text-neutral-900'
+      )
+    "
   >
     <!-- Virtual top menu for native window (drag handle) -->
     <div
       v-show="isNativeWindow()"
       ref="topMenuRef"
-      class="app-drag w-full h-[var(--comfy-topbar-height)]"
+      class="app-drag h-(--comfy-topbar-height) w-full"
     />
-    <div
-      class="flex-grow w-full flex items-center justify-center overflow-auto"
-    >
+    <div class="flex w-full grow items-center justify-center overflow-auto">
       <slot />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { cn } from '@comfyorg/tailwind-utils'
 import { nextTick, onMounted, ref } from 'vue'
 
-import { electronAPI, isElectron, isNativeWindow } from '@/utils/envUtil'
+import { electronAPI, isNativeWindow } from '@/utils/envUtil'
+import { isDesktop } from '@/platform/distribution/types'
 
 const { dark = false } = defineProps<{
   dark?: boolean
@@ -42,7 +44,7 @@ const lightTheme = {
 
 const topMenuRef = ref<HTMLDivElement | null>(null)
 onMounted(async () => {
-  if (isElectron()) {
+  if (isDesktop) {
     await nextTick()
 
     electronAPI().changeTheme({

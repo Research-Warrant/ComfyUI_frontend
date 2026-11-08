@@ -1,37 +1,91 @@
-export function getFromPngBuffer(buffer: ArrayBuffer) {
-  // Get the PNG data as a Uint8Array
+async function decompressZlib(
+  data: Uint8Array<ArrayBuffer>
+): Promise<Uint8Array<ArrayBuffer>> {
+  const compressed = new Blob([data]).stream()
+  const decompressed = compressed.pipeThrough(
+    new DecompressionStream('deflate')
+  )
+  return new Uint8Array(await new Response(decompressed).arrayBuffer())
+}
+
+export async function getFromPngBuffer(
+  buffer: ArrayBuffer
+): Promise<Record<string, string>> {
   const pngData = new Uint8Array(buffer)
   const dataView = new DataView(pngData.buffer)
 
-  // Check that the PNG signature is present
   if (dataView.getUint32(0) !== 0x89504e47) {
     console.error('Not a valid PNG file')
-    return
+    return {}
   }
 
-  // Start searching for chunks after the PNG signature
   let offset = 8
-  let txt_chunks: Record<string, string> = {}
-  // Loop through the chunks in the PNG file
+  const txt_chunks: Record<string, string> = {}
+
   while (offset < pngData.length) {
-    // Get the length of the chunk
     const length = dataView.getUint32(offset)
-    // Get the chunk type
     const type = String.fromCharCode(...pngData.slice(offset + 4, offset + 8))
-    if (type === 'tEXt' || type == 'comf' || type === 'iTXt') {
-      // Get the keyword
-      let keyword_end = offset + 8
-      while (pngData[keyword_end] !== 0) {
-        keyword_end++
+    const chunkEnd = offset + 8 + length
+
+    if (type === 'IEND') break
+
+    if (chunkEnd > pngData.length) {
+      console.error(`PNG chunk "${type}" runs past the end of the file`)
+      break
+    }
+
+    if (type === 'tEXt' || type === 'comf' || type === 'iTXt') {
+      const keywordLength = pngData.subarray(offset + 8, chunkEnd).indexOf(0)
+      if (keywordLength === -1) {
+        console.error(`PNG chunk "${type}" has an unterminated keyword`)
+        offset += 12 + length
+        continue
       }
+      const keyword_end = offset + 8 + keywordLength
       const keyword = String.fromCharCode(
         ...pngData.slice(offset + 8, keyword_end)
       )
-      // Get the text
-      const contentArraySegment = pngData.slice(
-        keyword_end + 1,
-        offset + 8 + length
-      )
+
+      let textStart = keyword_end + 1
+      let isCompressed = false
+      let compressionMethod = 0
+
+      if (type === 'iTXt') {
+        isCompressed = pngData[textStart] === 1
+        compressionMethod = pngData[textStart + 1]
+        textStart += 2
+
+        while (pngData[textStart] !== 0 && textStart < chunkEnd) {
+          textStart++
+        }
+        if (textStart < chunkEnd) textStart++
+
+        while (pngData[textStart] !== 0 && textStart < chunkEnd) {
+          textStart++
+        }
+        if (textStart < chunkEnd) textStart++
+      }
+
+      let contentArraySegment = pngData.slice(textStart, chunkEnd)
+
+      if (isCompressed) {
+        if (compressionMethod === 0) {
+          try {
+            contentArraySegment = await decompressZlib(contentArraySegment)
+          } catch (e) {
+            console.error(`Failed to decompress iTXt chunk "${keyword}":`, e)
+            offset += 12 + length
+            continue
+          }
+        } else {
+          console.warn(
+            `Unsupported compression method ${compressionMethod} for iTXt chunk "${keyword}"`
+          )
+          offset += 12 + length
+          continue
+        }
+      }
+
       const contentJson = new TextDecoder('utf-8').decode(contentArraySegment)
       txt_chunks[keyword] = contentJson
     }
@@ -41,14 +95,25 @@ export function getFromPngBuffer(buffer: ArrayBuffer) {
   return txt_chunks
 }
 
-export function getFromPngFile(file: File) {
-  return new Promise<Record<string, string>>((r) => {
+export async function getFromPngFile(
+  file: File
+): Promise<Record<string, string>> {
+  return new Promise<Record<string, string>>((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = (event) => {
-      // @ts-expect-error fixme ts strict error
-      r(getFromPngBuffer(event.target.result as ArrayBuffer))
+    reader.onload = async (event) => {
+      const buffer = event.target?.result
+      if (!(buffer instanceof ArrayBuffer)) {
+        reject(new Error('Failed to read file as ArrayBuffer'))
+        return
+      }
+      try {
+        resolve(await getFromPngBuffer(buffer))
+      } catch (error) {
+        reject(error)
+      }
     }
-
+    reader.onerror = () => reject(reader.error)
+    reader.onabort = () => reject(new Error('FileReader aborted'))
     reader.readAsArrayBuffer(file)
   })
 }

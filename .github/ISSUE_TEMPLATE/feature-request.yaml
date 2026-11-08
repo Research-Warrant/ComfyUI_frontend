@@ -1,17 +1,9 @@
 name: Feature Request
 description: Report a problem or limitation you're experiencing
-title: '[Feature]: '
-labels: ['enhancement']
+labels: []
 type: Feature
 
 body:
-  - type: checkboxes
-    attributes:
-      label: Is there an existing issue for this?
-      description: Please search to see if an issue already exists for the problem you're experiencing, and that it's not addressed in a recent build/commit.
-      options:
-        - label: I have searched the existing issues and checked the recent builds/commits
-          required: true
   - type: markdown
     attributes:
       value: |

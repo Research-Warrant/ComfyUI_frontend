@@ -1,0 +1,236 @@
+import { FirebaseError } from 'firebase/app'
+import { ref } from 'vue'
+
+import {
+  authErrorMessage,
+  classifyAuthError,
+  severityForAuthError
+} from '@comfyorg/account-core/firebaseAuthError'
+import type {
+  AuthErrorClassification,
+  AuthErrorCopy
+} from '@comfyorg/account-core/firebaseAuthError'
+
+import { useErrorHandling } from '@/composables/useErrorHandling'
+import { st, t } from '@/i18n'
+import enMessages from '@/locales/en/main.json' with { type: 'json' }
+import { presentSsoRequired } from '@/platform/auth/sso/ssoRequired'
+import { isCloud } from '@/platform/distribution/types'
+import { useTelemetry } from '@comfyorg/telemetry'
+import type { AuthFlowAction } from '@comfyorg/telemetry/types'
+import { useToast } from '@/components/ui/toast/toastStore'
+import {
+  clearAllWorkspaceStorage,
+  prepareWorkflowLogoutTransition
+} from '@/platform/workflow/persistence/base/storageIO'
+import { useWorkflowService } from '@/platform/workflow/core/services/workflowService'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { useDialogService } from '@/services/dialogService'
+import { SsoRequiredAuthError, useAuthStore } from '@/stores/authStore'
+import type { SocialSignInOptions } from '@/stores/authStore'
+
+/**
+ * The app's own auth.errors table, read through vue-i18n at resolution time.
+ * The key set is the app's, so a code added to main.json renders without the
+ * package having to know it.
+ */
+export const localizedAuthErrorCopy = (): AuthErrorCopy => ({
+  ...Object.fromEntries(
+    Object.keys(enMessages.auth.errors).map((key) => [
+      key,
+      st(`auth.errors.${key}`, t('auth.errors.generic'))
+    ])
+  ),
+  generic: t('auth.errors.generic'),
+  signupBlocked: st('auth.errors.signupBlocked', t('auth.errors.generic'))
+})
+
+const isPopupTakenOverByDesktop = (
+  classification: AuthErrorClassification
+): boolean =>
+  !!window.__comfyDesktop2 &&
+  classification.kind === 'popup-dismissed' &&
+  classification.code === 'auth/popup-blocked'
+
+/**
+ * Service for Firebase Auth actions.
+ * All actions are wrapped with error handling.
+ * @returns {Object} - Object containing all Firebase Auth actions
+ */
+export const useAuthActions = () => {
+  const authStore = useAuthStore()
+  const toast = useToast()
+  const { wrapWithErrorHandlingAsync, toastErrorHandler } = useErrorHandling()
+
+  const accessError = ref(false)
+
+  const reportAuthFlowError =
+    (authAction: AuthFlowAction) => (error: unknown) => {
+      useTelemetry()?.trackAuthFailed({
+        error_code: error instanceof FirebaseError ? error.code : 'unknown',
+        auth_action: authAction
+      })
+      reportError(error)
+    }
+
+  /** Sends an account its SSO organization refused to SSO instead of a failure toast. */
+  const presentSsoRefusal = (error: SsoRequiredAuthError): boolean => {
+    const presented = presentSsoRequired('customer_create', {
+      email: authStore.userEmail ?? undefined,
+      organizationId: error.organizationId
+    })
+    if (presented) void authStore.logout().catch(toastErrorHandler)
+    return presented
+  }
+
+  const reportError = (error: unknown) => {
+    if (error instanceof SsoRequiredAuthError && presentSsoRefusal(error)) {
+      return
+    }
+    const classification = classifyAuthError(error)
+    if (isPopupTakenOverByDesktop(classification)) {
+      toast.info(t('auth.desktopHost.continueInBrowser'), { duration: 6000 })
+      return
+    }
+    // Ref: https://firebase.google.com/docs/auth/admin/errors
+    const kind = severityForAuthError(classification)
+    const notify = (description: string) =>
+      toast[kind](t(`g.${kind}`), { description })
+    if (classification.kind === 'unauthorized-domain') {
+      accessError.value = true
+      notify(
+        t('toastMessages.unauthorizedDomain', {
+          domain: window.location.hostname,
+          email: 'support@comfy.org'
+        })
+      )
+    } else if (classification.kind !== 'unknown') {
+      notify(authErrorMessage(classification, localizedAuthErrorCopy()))
+    } else if (error instanceof FirebaseError) {
+      // classifyAuthError only knows auth/ codes; an app/ or installations/
+      // FirebaseError still gets the localized copy, never the raw SDK text.
+      toast.error(t('g.error'), {
+        description: st(`auth.errors.${error.code}`, t('auth.errors.generic'))
+      })
+    } else {
+      toastErrorHandler(error)
+    }
+  }
+
+  /** `beforeSignOut` runs once unsaved work is settled; false keeps the user signed in. */
+  const logout = wrapWithErrorHandlingAsync(
+    async ({
+      beforeSignOut,
+      signInPath = '/cloud/login'
+    }: {
+      beforeSignOut?: () => Promise<boolean>
+      signInPath?: string
+    } = {}): Promise<boolean> => {
+      if (isCloud) {
+        const workflowStore = useWorkflowStore()
+        const modifiedWorkflows = workflowStore.modifiedWorkflows
+        if (modifiedWorkflows.length > 0) {
+          const dialogService = useDialogService()
+          const confirmed = await dialogService.confirm({
+            title: t('auth.signOut.unsavedChangesTitle'),
+            message: t('auth.signOut.unsavedChangesMessage'),
+            type: 'dirtyClose',
+            denyLabel: t('auth.signOut.signOutAnyway')
+          })
+          if (confirmed === null) return false
+
+          if (confirmed) {
+            const workflowService = useWorkflowService()
+            for (const workflow of modifiedWorkflows) {
+              try {
+                const saved = await workflowService.saveWorkflow(workflow)
+                if (!saved) return false
+              } catch {
+                throw new Error(
+                  t('auth.signOut.saveFailed', { workflow: workflow.path })
+                )
+              }
+            }
+          }
+        }
+      }
+
+      if (beforeSignOut && !(await beforeSignOut())) return false
+
+      await authStore.logout()
+      if (isCloud) {
+        prepareWorkflowLogoutTransition()
+        clearAllWorkspaceStorage()
+      }
+
+      toast.success(t('auth.signOut.success'), {
+        description: t('auth.signOut.successDetail'),
+        duration: 5000
+      })
+
+      if (isCloud) {
+        try {
+          window.location.href = signInPath
+        } catch {
+          // needed for local development until we bring in cloud login pages.
+          window.location.reload()
+        }
+      }
+      return true
+    },
+    reportError
+  )
+
+  const sendPasswordReset = wrapWithErrorHandlingAsync(
+    async (email: string) => {
+      await authStore.sendPasswordReset(email)
+      toast.success(t('auth.login.passwordResetSent'), {
+        description: t('auth.login.passwordResetSentDetail'),
+        duration: 5000
+      })
+      return true
+    },
+    reportAuthFlowError('password_reset')
+  )
+
+  const signInWithGoogle = async (options?: SocialSignInOptions) =>
+    await wrapWithErrorHandlingAsync(
+      async () => await authStore.loginWithGoogle(options),
+      reportAuthFlowError(
+        options?.isNewUser ? 'google_sign_up' : 'google_sign_in'
+      )
+    )()
+
+  const signInWithGithub = async (options?: SocialSignInOptions) =>
+    await wrapWithErrorHandlingAsync(
+      async () => await authStore.loginWithGithub(options),
+      reportAuthFlowError(
+        options?.isNewUser ? 'github_sign_up' : 'github_sign_in'
+      )
+    )()
+
+  const signInWithEmail = wrapWithErrorHandlingAsync(
+    async (email: string, password: string) => {
+      return await authStore.login(email, password)
+    },
+    reportAuthFlowError('email_sign_in')
+  )
+
+  const signUpWithEmail = wrapWithErrorHandlingAsync(
+    async (email: string, password: string, turnstileToken?: string) => {
+      return await authStore.register(email, password, turnstileToken)
+    },
+    reportAuthFlowError('email_sign_up')
+  )
+
+  return {
+    logout,
+    sendPasswordReset,
+    signInWithGoogle,
+    signInWithGithub,
+    signInWithEmail,
+    signUpWithEmail,
+    accessError,
+    reportError
+  }
+}

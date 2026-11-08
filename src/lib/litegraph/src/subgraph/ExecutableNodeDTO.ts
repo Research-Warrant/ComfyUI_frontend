@@ -1,18 +1,22 @@
-import type { LGraph } from '@/lib/litegraph/src/LGraph'
-import type { LGraphNode, NodeId } from '@/lib/litegraph/src/LGraphNode'
+import type {
+  LGraph,
+  LGraphNode,
+  Subgraph,
+  SubgraphNode
+} from '@comfyorg/graph-model/entityRegistry'
+import { inputLinkId } from '@/lib/litegraph/src/node/slotLinks'
+
+import type { SerializedNodeId } from '@comfyorg/graph-model/nodeId'
+import type { LinkId } from '@comfyorg/graph-model/linkId'
 import { InvalidLinkError } from '@/lib/litegraph/src/infrastructure/InvalidLinkError'
+import { useWidgetValueStore } from '@/stores/widgetValueStore'
 import { NullGraphError } from '@/lib/litegraph/src/infrastructure/NullGraphError'
 import { RecursionError } from '@/lib/litegraph/src/infrastructure/RecursionError'
 import { SlotIndexError } from '@/lib/litegraph/src/infrastructure/SlotIndexError'
-import type {
-  CallbackParams,
-  CallbackReturn,
-  ISlotType
-} from '@/lib/litegraph/src/interfaces'
-import { LGraphEventMode, LiteGraph } from '@/lib/litegraph/src/litegraph'
-
-import { Subgraph } from './Subgraph'
-import type { SubgraphNode } from './SubgraphNode'
+import type { ISlotType } from '@comfyorg/graph-model/interfaces'
+import { LGraphEventMode } from '@comfyorg/graph-model/globalEnums'
+import { litegraph } from '@/lib/litegraph/src/litegraphInstance'
+import { reportError } from '@comfyorg/telemetry/reportError'
 
 export type ExecutionId = string
 
@@ -45,19 +49,19 @@ type ResolvedInput = {
  */
 export class ExecutableNodeDTO implements ExecutableLGraphNode {
   applyToGraph?(
-    ...args: CallbackParams<typeof this.node.applyToGraph>
-  ): CallbackReturn<typeof this.node.applyToGraph>
+    ...args: Parameters<NonNullable<LGraphNode['applyToGraph']>>
+  ): ReturnType<NonNullable<LGraphNode['applyToGraph']>>
 
   /** The graph that this node is a part of. */
   readonly graph: LGraph | Subgraph
 
-  inputs: { linkId: number | null; name: string; type: ISlotType }[]
+  inputs: { linkId: LinkId | null; name: string; type: ISlotType }[]
 
   /** Backing field for {@link id}. */
-  #id: ExecutionId
+  private _id: ExecutionId
 
   /**
-   * The path to the acutal node through subgraph instances, represented as a list of all subgraph node IDs (instances),
+   * The path to the actual node through subgraph instances, represented as a list of all subgraph node IDs (instances),
    * followed by the actual original node ID within the subgraph. Each segment is separated by `:`.
    *
    * e.g. `1:2:3`:
@@ -66,7 +70,7 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
    * - `3` is the node ID of the actual node in the subgraph definition
    */
   get id() {
-    return this.#id
+    return this._id
   }
 
   get type() {
@@ -85,6 +89,11 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
     return this.node.comfyClass
   }
 
+  // fallow-ignore-next-line unused-class-member
+  get properties() {
+    return this.node.properties
+  }
+
   get isVirtualNode() {
     return this.node.isVirtualNode
   }
@@ -101,19 +110,19 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
     /** The actual node that this DTO wraps. */
     readonly node: LGraphNode | SubgraphNode,
     /** A list of subgraph instance node IDs from the root graph to the containing instance. @see {@link id} */
-    readonly subgraphNodePath: readonly NodeId[],
+    readonly subgraphNodePath: readonly SerializedNodeId[],
     /** A flattened map of all DTOs in this node network. Subgraph instances have been expanded into their inner nodes. */
     readonly nodesByExecutionId: Map<ExecutionId, ExecutableLGraphNode>,
-    /** The actual subgraph instance that contains this node, otherise undefined. */
+    /** The actual subgraph instance that contains this node, otherwise undefined. */
     readonly subgraphNode?: SubgraphNode
   ) {
     if (!node.graph) throw new NullGraphError()
 
     // Set the internal ID of the DTO
-    this.#id = [...this.subgraphNodePath, this.node.id].join(':')
+    this._id = [...this.subgraphNodePath, this.node.id].join(':')
     this.graph = node.graph
-    this.inputs = this.node.inputs.map((x) => ({
-      linkId: x.link,
+    this.inputs = this.node.inputs.map((x, index) => ({
+      linkId: inputLinkId(node.graph!, node.id, index) ?? null,
       name: x.name,
       type: x.type
     }))
@@ -141,7 +150,8 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
    */
   resolveInput(
     slot: number,
-    visited = new Set<string>()
+    visited = new Set<string>(),
+    type?: ISlotType
   ): ResolvedInput | undefined {
     const uniqueId = `${this.subgraphNode?.subgraph.id}:${this.node.id}[I]${slot}`
     if (visited.has(uniqueId)) {
@@ -182,18 +192,23 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
           `No input found for slot [${link.origin_slot}] ${input.name}`
         )
 
+      if (!subgraphNode.graph)
+        throw new NullGraphError(
+          `SubgraphNode ${subgraphNode.id} has no graph during input resolution`
+        )
       // Nothing connected
-      const linkId = subgraphNodeInput.link
-      if (linkId == null) {
-        const widget = subgraphNode.getWidgetFromSlot(subgraphNodeInput)
-        if (!widget) return
+      const linkId =
+        inputLinkId(subgraphNode.graph, subgraphNode.id, link.origin_slot) ??
+        null
+      if (linkId === null) {
+        const id = subgraphNodeInput.widgetId
+        if (!id) return
 
-        // Special case: SubgraphNode widget.
         return {
           node: this,
           origin_id: this.id,
           origin_slot: -1,
-          widgetInfo: { value: widget.value }
+          widgetInfo: { value: useWidgetValueStore().getWidget(id)?.value }
         }
       }
 
@@ -203,7 +218,8 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
           `No outer link found for slot [${link.origin_slot}] ${input.name}`
         )
 
-      const subgraphNodeExecutionId = this.subgraphNodePath.join(':')
+      const subgraphNodeExecutionId: ExecutionId =
+        this.subgraphNodePath.join(':')
       const subgraphNodeDto = this.nodesByExecutionId.get(
         subgraphNodeExecutionId
       )
@@ -222,7 +238,7 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
         `No input node found for id [${this.id}] slot [${slot}] ${input.name}`
       )
 
-    const outputNodeExecutionId = [
+    const outputNodeExecutionId: ExecutionId = [
       ...this.subgraphNodePath,
       outputNode.id
     ].join(':')
@@ -232,7 +248,11 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
         `No output node DTO found for id [${outputNodeExecutionId}]`
       )
 
-    return outputNodeDto.resolveOutput(link.origin_slot, input.type, visited)
+    return outputNodeDto.resolveOutput(
+      link.origin_slot,
+      type ?? input.type,
+      visited
+    )
   }
 
   /**
@@ -261,14 +281,17 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
     }
     visited.add(uniqueId)
 
+    // Muted nodes produce no output
+    if (this.mode === LGraphEventMode.NEVER) return
+
     // Upstreamed: Bypass nodes are bypassed using the first input with matching type
     if (this.mode === LGraphEventMode.BYPASS) {
       // Bypass nodes by finding first input with matching type
-      const matchingIndex = this.#getBypassSlotIndex(slot, type)
+      const matchingIndex = this._getBypassSlotIndex(slot, type)
 
-      // No input types match
-      if (matchingIndex === undefined) {
-        console.debug(
+      // No input types match - bypass not possible
+      if (matchingIndex === -1) {
+        console.warn(
           `[ExecutableNodeDTO.resolveOutput] No input types match type [${type}] for id [${this.id}] slot [${slot}]`,
           this
         )
@@ -280,34 +303,40 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
 
     const { node } = this
     if (node.isSubgraphNode())
-      return this.#resolveSubgraphOutput(slot, type, visited)
+      return this._resolveSubgraphOutput(slot, type, visited)
 
-    // Upstreamed: Other virtual nodes are bypassed using the same input/output index (slots must match)
     if (node.isVirtualNode) {
-      if (this.inputs.at(slot)) return this.resolveInput(slot, visited)
+      // Cross-graph virtual nodes (e.g. Set/Get) resolve their source directly.
+      const virtualSource = this.node.resolveVirtualOutput?.(slot)
+      if (virtualSource) {
+        const inputNodeDto = [...this.nodesByExecutionId.values()].find(
+          (dto) =>
+            dto instanceof ExecutableNodeDTO && dto.node === virtualSource.node
+        )
+        if (!inputNodeDto)
+          throw new Error(
+            `No DTO found for virtual source node [${virtualSource.node.id}]`
+          )
 
-      // Fallback check for nodes performing link redirection
+        return inputNodeDto.resolveOutput(virtualSource.slot, type, visited)
+      }
       const virtualLink = this.node.getInputLink(slot)
       if (virtualLink) {
-        const outputNode = this.graph.getNodeById(virtualLink.origin_id)
-        if (!outputNode)
+        const { inputNode } = virtualLink.resolve(this.graph)
+        if (!inputNode)
           throw new InvalidLinkError(
             `Virtual node failed to resolve parent [${this.id}] slot [${slot}]`
           )
 
-        const outputNodeExecutionId = [
+        const inputNodeExecutionId: ExecutionId = [
           ...this.subgraphNodePath,
-          outputNode.id
+          inputNode.id
         ].join(':')
-        const outputNodeDto = this.nodesByExecutionId.get(outputNodeExecutionId)
-        if (!outputNodeDto)
-          throw new Error(`No output node DTO found for id [${outputNode.id}]`)
+        const inputNodeDto = this.nodesByExecutionId.get(inputNodeExecutionId)
+        if (!inputNodeDto)
+          throw new Error(`No input node DTO found for id [${inputNode.id}]`)
 
-        return outputNodeDto.resolveOutput(
-          virtualLink.origin_slot,
-          type,
-          visited
-        )
+        return inputNodeDto.resolveInput(virtualLink.target_slot, visited, type)
       }
 
       // Virtual nodes without a matching input should be discarded.
@@ -326,11 +355,11 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
    * Used when bypassing nodes.
    * @param slot The output slot index on this node
    * @param type The type of the final target input (so type list matches are accurate)
-   * @returns The index of the input slot on this node, otherwise `undefined`.
+   * @returns The index of the input slot on this node, otherwise `-1`.
    */
-  #getBypassSlotIndex(slot: number, type: ISlotType) {
+  private _getBypassSlotIndex(slot: number, type: ISlotType) {
     const { inputs } = this
-    const oppositeInput = inputs[slot]
+    const oppositeInput = inputs.at(slot)
     const outputType = this.node.outputs[slot].type
 
     // Any type short circuit - match slot ID, fallback to first slot
@@ -341,21 +370,21 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
     // Prefer input with the same slot ID
     if (
       oppositeInput &&
-      LiteGraph.isValidConnection(oppositeInput.type, outputType) &&
-      LiteGraph.isValidConnection(oppositeInput.type, type)
+      litegraph().isValidConnection(oppositeInput.type, outputType) &&
+      litegraph().isValidConnection(oppositeInput.type, type)
     ) {
       return slot
     }
 
+    // Preserve legacy behaviour; use exact match first.
+    const exactMatch = inputs.findIndex((input) => input.type === type)
+    if (exactMatch !== -1) return exactMatch
+
     // Find first matching slot - prefer exact type
-    return (
-      // Preserve legacy behaviour; use exact match first.
-      inputs.findIndex((input) => input.type === type) ??
-      inputs.findIndex(
-        (input) =>
-          LiteGraph.isValidConnection(input.type, outputType) &&
-          LiteGraph.isValidConnection(input.type, type)
-      )
+    return inputs.findIndex(
+      (input) =>
+        litegraph().isValidConnection(input.type, outputType) &&
+        litegraph().isValidConnection(input.type, type)
     )
   }
 
@@ -365,7 +394,7 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
    * @param visited A set of unique IDs to guard against infinite recursion. See {@link resolveInput}.
    * @returns A DTO for the node, and the origin ID / slot index of the output.
    */
-  #resolveSubgraphOutput(
+  private _resolveSubgraphOutput(
     slot: number,
     type: ISlotType,
     visited: Set<string>
@@ -380,18 +409,29 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
     if (!node.isSubgraphNode())
       throw new TypeError(`Node is not a subgraph node: ${node.id}`)
 
-    // Link inside the subgraph
     const innerResolved = node.resolveSubgraphOutputLink(slot)
     if (!innerResolved) return
 
-    const innerNode = innerResolved.outputNode
-    if (!innerNode)
-      throw new Error(
-        `No output node found for id [${this.id}] slot [${slot}] ${output.name}`
+    if (innerResolved.link.originIsIoNode) {
+      return this.resolvePassThroughOutput(
+        node,
+        innerResolved.link.origin_slot,
+        visited,
+        type
       )
+    }
 
-    // Recurse into the subgraph
-    const innerNodeExecutionId = [
+    const innerNode = innerResolved.outputNode
+    if (!innerNode) {
+      console.warn(
+        `[ExecutableNodeDTO] Subgraph output link has no origin node; skipping output [${slot}] ${output.name}`,
+        { id: this.id, originId: innerResolved.link.origin_id }
+      )
+      reportDanglingSubgraphOutput(node.subgraph)
+      return
+    }
+
+    const innerNodeExecutionId: ExecutionId = [
       ...this.subgraphNodePath,
       node.id,
       innerNode.id
@@ -407,5 +447,55 @@ export class ExecutableNodeDTO implements ExecutableLGraphNode {
       type,
       visited
     )
+  }
+
+  private resolvePassThroughOutput(
+    node: SubgraphNode,
+    inputSlot: number,
+    visited: Set<string>,
+    type: ISlotType
+  ): ResolvedInput | undefined {
+    const input = this.inputs.at(inputSlot)
+    if (!input) {
+      console.warn(
+        `[ExecutableNodeDTO] Subgraph output passes through a missing input; skipping it`,
+        { id: this.id, inputSlot }
+      )
+      return
+    }
+    if (input.linkId != null) return this.resolveInput(inputSlot, visited, type)
+
+    const id = node.inputs.at(inputSlot)?.widgetId
+    if (!id) return
+    return {
+      node: this,
+      origin_id: this.id,
+      origin_slot: -1,
+      widgetInfo: { value: useWidgetValueStore().getWidget(id)?.value }
+    }
+  }
+}
+
+const reportedDanglingSubgraphs = new WeakSet<object>()
+
+function reportDanglingSubgraphOutput(subgraph: object): void {
+  if (reportedDanglingSubgraphs.has(subgraph)) return
+  reportedDanglingSubgraphs.add(subgraph)
+  reportError(new Error('Subgraph output link has no origin node'), {
+    surface: 'graph',
+    errorType: 'error_resolving_subgraph_output_origin',
+    level: 'warning',
+    fingerprint: ['error_resolving_subgraph_output_origin'],
+    logToConsole: false
+  })
+}
+
+type RegisteredExecutableLGraphNode = ExecutableLGraphNode
+type RegisteredExecutionId = ExecutionId
+
+declare module '@comfyorg/graph-model/entityRegistry' {
+  interface LitegraphEntityRegistry {
+    ExecutableLGraphNode: RegisteredExecutableLGraphNode
+    ExecutionId: RegisteredExecutionId
   }
 }

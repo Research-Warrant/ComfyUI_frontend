@@ -1,0 +1,141 @@
+<template>
+  <div
+    data-testid="publish-describe-step"
+    class="flex min-h-0 flex-1 flex-col gap-6 px-6 py-4"
+  >
+    <label class="flex flex-col gap-2">
+      <span class="text-sm text-foreground">
+        {{ $t('comfyHubPublish.workflowName') }}
+      </span>
+      <Input
+        data-testid="publish-name-input"
+        :model-value="name"
+        :placeholder="$t('comfyHubPublish.workflowNamePlaceholder')"
+        @update:model-value="$emit('update:name', String($event))"
+      />
+    </label>
+
+    <label class="flex flex-col gap-2">
+      <span class="text-sm text-foreground">
+        {{ $t('comfyHubPublish.workflowDescription') }}
+      </span>
+      <Textarea
+        :model-value="description"
+        :placeholder="$t('comfyHubPublish.workflowDescriptionPlaceholder')"
+        rows="5"
+        @update:model-value="$emit('update:description', String($event))"
+      />
+    </label>
+
+    <label class="flex flex-col gap-2">
+      <span class="text-sm text-foreground">
+        {{ $t('comfyHubPublish.tagsDescription') }}
+      </span>
+      <TagEditor
+        data-testid="publish-tags-input"
+        always-editing
+        class="bg-secondary select-none"
+        item-class="backdrop-blur-none"
+        :model-value="tags"
+        @update:model-value="$emit('update:tags', $event)"
+      />
+    </label>
+    <TagsInput disabled class="p-0 hover:bg-transparent">
+      <div
+        v-if="displayedSuggestions.length > 0"
+        class="flex basis-full flex-wrap gap-2"
+      >
+        <TagsInputItem
+          v-for="tag in displayedSuggestions"
+          :key="tag"
+          v-auto-animate
+          :value="tag"
+          class="cursor-pointer bg-secondary px-2 text-muted-foreground backdrop-blur-none transition-colors select-none hover:bg-muted"
+          @click="addTag(tag)"
+        >
+          <TagsInputItemText />
+        </TagsInputItem>
+      </div>
+      <Button
+        v-if="shouldShowSuggestionToggle"
+        variant="muted-textonly"
+        size="unset"
+        class="px-0 text-xs hover:bg-transparent"
+        @click="showAllSuggestions = !showAllSuggestions"
+      >
+        {{
+          $t(
+            showAllSuggestions
+              ? 'comfyHubPublish.showLessTags'
+              : 'comfyHubPublish.showMoreTags'
+          )
+        }}
+      </Button>
+    </TagsInput>
+  </div>
+</template>
+
+<script setup lang="ts">
+import Button from '@comfyorg/design-system/button/Button'
+import Input from '@comfyorg/design-system/input/Input'
+import TagsInput from '@comfyorg/design-system/tags-input/TagsInput'
+import TagEditor from '@/components/common/TagEditor.vue'
+import TagsInputItem from '@comfyorg/design-system/tags-input/TagsInputItem'
+import TagsInputItemText from '@comfyorg/design-system/tags-input/TagsInputItemText'
+import Textarea from '@comfyorg/design-system/textarea/Textarea'
+import { COMFY_HUB_TAG_OPTIONS } from '@/platform/workflow/sharing/constants/comfyHubTags'
+import { useComfyHubService } from '@/platform/workflow/sharing/services/comfyHubService'
+import { computed, onMounted, ref } from 'vue'
+import { vAutoAnimate } from '@formkit/auto-animate/vue'
+
+const { tags } = defineProps<{
+  name: string
+  description: string
+  tags: string[]
+}>()
+
+const emit = defineEmits<{
+  'update:name': [value: string]
+  'update:description': [value: string]
+  'update:tags': [value: string[]]
+}>()
+
+const INITIAL_TAG_SUGGESTION_COUNT = 10
+
+const showAllSuggestions = ref(false)
+const tagOptions = ref<string[]>(COMFY_HUB_TAG_OPTIONS)
+
+const { fetchTagLabels } = useComfyHubService()
+
+onMounted(async () => {
+  try {
+    tagOptions.value = await fetchTagLabels()
+  } catch {
+    // Fall back to hardcoded tags
+  }
+})
+
+const availableSuggestions = computed(() =>
+  tagOptions.value.filter((tag) => !tags.includes(tag))
+)
+
+const displayedSuggestions = computed(() =>
+  showAllSuggestions.value
+    ? availableSuggestions.value
+    : availableSuggestions.value.slice(0, INITIAL_TAG_SUGGESTION_COUNT)
+)
+
+const hasHiddenSuggestions = computed(
+  () =>
+    !showAllSuggestions.value &&
+    availableSuggestions.value.length > INITIAL_TAG_SUGGESTION_COUNT
+)
+
+const shouldShowSuggestionToggle = computed(
+  () => showAllSuggestions.value || hasHiddenSuggestions.value
+)
+
+function addTag(tag: string) {
+  emit('update:tags', [...tags, tag])
+}
+</script>

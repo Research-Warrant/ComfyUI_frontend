@@ -1,19 +1,15 @@
 import { clamp } from 'es-toolkit/compat'
 
-import type { ISliderWidget } from '@/lib/litegraph/src/types/widgets'
+import type { ISliderWidget } from '@comfyorg/graph-model/widgets'
+import { coerceNumericWidgetValue } from '@/lib/litegraph/src/utils/widget'
 
-import {
-  BaseWidget,
-  type DrawWidgetOptions,
-  type WidgetEventOptions
-} from './BaseWidget'
+import { BaseWidget } from './BaseWidget'
+import type { DrawWidgetOptions, WidgetEventOptions } from './BaseWidget'
 
 export class SliderWidget
   extends BaseWidget<ISliderWidget>
   implements ISliderWidget
 {
-  override type = 'slider' as const
-
   marker?: number
 
   /**
@@ -36,8 +32,9 @@ export class SliderWidget
     ctx.fillRect(margin, y, width - margin * 2, height)
 
     // Calculate normalized value
+    const value = coerceNumericWidgetValue(this.value)
     const range = this.options.max - this.options.min
-    let nvalue = (this.value - this.options.min) / range
+    let nvalue = (value - this.options.min) / range
     nvalue = clamp(nvalue, 0, 1)
 
     // Draw slider bar
@@ -46,7 +43,7 @@ export class SliderWidget
 
     // Draw outline if not disabled
     if (showText && !this.computedDisabled) {
-      ctx.strokeStyle = this.outline_color
+      ctx.strokeStyle = this.getOutlineColor()
       ctx.strokeRect(margin, y, width - margin * 2, height)
     }
 
@@ -62,7 +59,7 @@ export class SliderWidget
     if (showText) {
       ctx.textAlign = 'center'
       ctx.fillStyle = this.text_color
-      const fixedValue = Number(this.value).toFixed(this.options.precision ?? 3)
+      const fixedValue = value.toFixed(this.options.precision ?? 3)
       ctx.fillText(
         `${this.label || this.name}  ${fixedValue}`,
         width * 0.5,

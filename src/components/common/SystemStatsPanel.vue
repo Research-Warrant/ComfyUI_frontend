@@ -1,74 +1,93 @@
 <template>
   <div class="system-stats">
     <div class="mb-6">
-      <h2 class="text-2xl font-semibold mb-4">
-        {{ $t('g.systemInfo') }}
-      </h2>
+      <div class="mb-4 flex items-center gap-2">
+        <h2 class="text-2xl font-semibold">
+          {{ $t('g.systemInfo') }}
+        </h2>
+        <Button variant="secondary" @click="copySystemInfo">
+          <i class="icon-[lucide--copy]" />
+          {{ $t('g.copySystemInfo') }}
+        </Button>
+      </div>
       <div class="grid grid-cols-2 gap-2">
-        <template v-for="col in systemColumns" :key="col.field">
-          <div class="font-medium">
-            {{ col.header }}
+        <template v-for="col in systemStatsColumns" :key="col.field">
+          <div
+            :class="cn('font-medium', isOutdated(col) && 'text-destructive')"
+          >
+            {{ $t(col.headerKey) }}
           </div>
-          <div>{{ formatValue(systemInfo[col.field], col.field) }}</div>
+          <div :class="cn(isOutdated(col) && 'text-destructive')">
+            {{ getColumnDisplayValue(stats, col) }}
+          </div>
         </template>
       </div>
     </div>
 
-    <Divider />
+    <template v-if="hasDevices">
+      <div class="my-4 border-t" />
 
-    <div>
-      <h2 class="text-2xl font-semibold mb-4">
-        {{ $t('g.devices') }}
-      </h2>
-      <TabView v-if="props.stats.devices.length > 1">
-        <TabPanel
-          v-for="device in props.stats.devices"
-          :key="device.index"
-          :header="device.name"
-          :value="device.index"
+      <div>
+        <h2 class="mb-4 text-2xl font-semibold">
+          {{ $t('g.devices') }}
+        </h2>
+        <Tabs
+          v-if="stats.devices.length > 1"
+          :default-value="String(stats.devices[0].index)"
         >
-          <DeviceInfo :device="device" />
-        </TabPanel>
-      </TabView>
-      <DeviceInfo v-else :device="props.stats.devices[0]" />
-    </div>
+          <TabsList variant="bordered" class="mb-4">
+            <TabsTrigger
+              v-for="device in stats.devices"
+              :key="device.index"
+              :value="String(device.index)"
+            >
+              {{ device.name }}
+            </TabsTrigger>
+          </TabsList>
+          <TabsContent
+            v-for="device in stats.devices"
+            :key="device.index"
+            :value="String(device.index)"
+          >
+            <DeviceInfo :device="device" />
+          </TabsContent>
+        </Tabs>
+        <DeviceInfo v-else :device="stats.devices[0]" />
+      </div>
+    </template>
   </div>
 </template>
 
 <script setup lang="ts">
-import Divider from 'primevue/divider'
-import TabPanel from 'primevue/tabpanel'
-import TabView from 'primevue/tabview'
 import { computed } from 'vue'
 
 import DeviceInfo from '@/components/common/DeviceInfo.vue'
-import type { SystemStats } from '@/schemas/apiSchema'
-import { formatSize } from '@/utils/formatUtil'
+import type { SystemStatsColumn } from '@/components/common/systemStatsColumns'
+import {
+  getColumnDisplayValue,
+  systemStatsColumns
+} from '@/components/common/systemStatsColumns'
+import Button from '@comfyorg/design-system/button/Button'
+import Tabs from '@comfyorg/design-system/tabs/Tabs'
+import TabsContent from '@comfyorg/design-system/tabs/TabsContent'
+import TabsList from '@comfyorg/design-system/tabs/TabsList'
+import TabsTrigger from '@comfyorg/design-system/tabs/TabsTrigger'
+import { useCopySystemInfo } from '@/composables/useCopySystemInfo'
+import type { SystemStats } from '@comfyorg/api-client/types'
+import { cn } from '@comfyorg/tailwind-utils'
 
-const props = defineProps<{
+const { stats } = defineProps<{
   stats: SystemStats
 }>()
 
-const systemInfo = computed(() => ({
-  ...props.stats.system,
-  argv: props.stats.system.argv.join(' ')
-}))
+const hasDevices = computed(() => stats.devices.length > 0)
 
-const systemColumns: { field: keyof SystemStats['system']; header: string }[] =
-  [
-    { field: 'os', header: 'OS' },
-    { field: 'python_version', header: 'Python Version' },
-    { field: 'embedded_python', header: 'Embedded Python' },
-    { field: 'pytorch_version', header: 'Pytorch Version' },
-    { field: 'argv', header: 'Arguments' },
-    { field: 'ram_total', header: 'RAM Total' },
-    { field: 'ram_free', header: 'RAM Free' }
-  ]
+const { copySystemInfo } = useCopySystemInfo(() => stats)
 
-const formatValue = (value: any, field: string) => {
-  if (['ram_total', 'ram_free'].includes(field)) {
-    return formatSize(value)
-  }
-  return value
+function isOutdated(column: SystemStatsColumn): boolean {
+  if (column.field !== 'installed_templates_version') return false
+  const installed = stats.system.installed_templates_version
+  const required = stats.system.required_templates_version
+  return !!installed && !!required && installed !== required
 }
 </script>

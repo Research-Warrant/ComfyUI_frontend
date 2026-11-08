@@ -7,8 +7,9 @@ Create a frontend release with version type: $ARGUMENTS
 
 Expected format: Version increment type and optional description
 Examples:
+
 - `patch` - Bug fixes only
-- `minor` - New features, backward compatible  
+- `minor` - New features, backward compatible
 - `major` - Breaking changes
 - `prerelease` - Alpha/beta/rc releases
 - `patch "Critical security fixes"` - With custom description
@@ -21,8 +22,9 @@ If no arguments provided, the command will always perform prerelease if the curr
 ## Prerequisites
 
 Before starting, ensure:
+
 - You have push access to the repository
-- GitHub CLI (`gh`) is authenticated  
+- GitHub CLI (`gh`) is authenticated
 - You're on a clean main branch working tree
 - All intended changes are merged to main
 - You understand the scope of changes being released
@@ -30,6 +32,7 @@ Before starting, ensure:
 ## Critical Checks Before Starting
 
 ### 1. Check Current Version Status
+
 ```bash
 # Get current version and check if it's a pre-release
 CURRENT_VERSION=$(node -p "require('./package.json').version")
@@ -40,6 +43,7 @@ fi
 ```
 
 ### 2. Find Last Stable Release
+
 ```bash
 # Get last stable release tag (no pre-release suffix)
 LAST_STABLE=$(git tag -l "v*" | grep -v "\-" | sort -V | tail -1)
@@ -49,6 +53,7 @@ echo "Last stable release: $LAST_STABLE"
 ## Configuration Options
 
 **Environment Variables:**
+
 - `RELEASE_SKIP_SECURITY_SCAN=true` - Skip security audit
 - `RELEASE_AUTO_APPROVE=true` - Skip some confirmation prompts
 - `RELEASE_DRY_RUN=true` - Simulate release without executing
@@ -117,7 +122,7 @@ echo "Last stable release: $LAST_STABLE"
    - Public TypeScript interfaces
    - Extension APIs
    - Component props
-   - CLAUDE.md guidelines
+   - AGENTS.md guidelines
 2. Check for:
    - Removed public functions/classes
    - Changed function signatures
@@ -128,23 +133,43 @@ echo "Last stable release: $LAST_STABLE"
 
 ### Step 4: Analyze Dependency Updates
 
-1. **Check significant dependency updates:**
+1. **Use pnpm's built-in dependency analysis:**
+
+   ```bash
+   # Get outdated dependencies with pnpm
+   pnpm outdated --format table > outdated-deps-${NEW_VERSION}.txt
+
+   # Check for license compliance
+   pnpm licenses ls --json > licenses-${NEW_VERSION}.json
+
+   # Analyze why specific dependencies exist
+   echo "Dependency analysis:" > dep-analysis-${NEW_VERSION}.md
+   MAJOR_DEPS=("vue" "vite" "@vitejs/plugin-vue" "typescript" "pinia")
+   for dep in "${MAJOR_DEPS[@]}"; do
+     echo -e "\n## $dep\n\`\`\`" >> dep-analysis-${NEW_VERSION}.md
+     pnpm why "$dep" >> dep-analysis-${NEW_VERSION}.md || echo "Not found" >> dep-analysis-${NEW_VERSION}.md
+     echo "\`\`\`" >> dep-analysis-${NEW_VERSION}.md
+   done
+   ```
+
+2. **Check for significant dependency updates:**
+
    ```bash
    # Extract all dependency changes for major version bumps
    OTHER_DEP_CHANGES=""
-   
+
    # Compare major dependency versions (you can extend this list)
    MAJOR_DEPS=("vue" "vite" "@vitejs/plugin-vue" "typescript" "pinia")
-   
+
    for dep in "${MAJOR_DEPS[@]}"; do
      PREV_VER=$(echo "$PREV_PACKAGE_JSON" | grep -o "\"$dep\": \"[^\"]*\"" | grep -o '[0-9][^"]*' | head -1 || echo "")
      CURR_VER=$(echo "$CURRENT_PACKAGE_JSON" | grep -o "\"$dep\": \"[^\"]*\"" | grep -o '[0-9][^"]*' | head -1 || echo "")
-     
+
      if [ "$PREV_VER" != "$CURR_VER" ] && [ -n "$PREV_VER" ] && [ -n "$CURR_VER" ]; then
        # Check if it's a major version change
        PREV_MAJOR=$(echo "$PREV_VER" | cut -d. -f1 | sed 's/[^0-9]//g')
        CURR_MAJOR=$(echo "$CURR_VER" | cut -d. -f1 | sed 's/[^0-9]//g')
-       
+
        if [ "$PREV_MAJOR" != "$CURR_MAJOR" ]; then
          OTHER_DEP_CHANGES="${OTHER_DEP_CHANGES}\n- **${dep}**: ${PREV_VER} → ${CURR_VER} (Major version change)"
        fi
@@ -155,11 +180,12 @@ echo "Last stable release: $LAST_STABLE"
 ### Step 5: Generate GTM Feature Summary
 
 1. **Collect PR data for analysis:**
+
    ```bash
    # Get list of PR numbers from commits
    PR_NUMBERS=$(git log ${BASE_TAG}..HEAD --oneline --no-merges --first-parent | \
      grep -oE "#[0-9]+" | tr -d '#' | sort -u)
-   
+
    # Save PR data for each PR
    echo "[" > prs-${NEW_VERSION}.json
    first=true
@@ -171,16 +197,17 @@ echo "Last stable release: $LAST_STABLE"
    ```
 
 2. **Analyze for GTM-worthy features:**
+
    ```
    <task>
    Review these PRs to identify features worthy of marketing attention.
-   
+
    A feature is GTM-worthy if it meets ALL of these criteria:
    - Introduces a NEW capability users didn't have before (not just improvements)
    - Would be a compelling reason for users to upgrade to this version
    - Can be demonstrated visually or has clear before/after comparison
    - Affects a significant portion of the user base
-   
+
    NOT GTM-worthy:
    - Bug fixes (even important ones)
    - Minor UI tweaks or color changes
@@ -188,37 +215,65 @@ echo "Last stable release: $LAST_STABLE"
    - Internal refactoring
    - Small convenience features
    - Features that only improve existing functionality marginally
-   
+
    For each GTM-worthy feature, note:
    - PR number, title, and author
    - Media links from the PR description
    - One compelling sentence on why users should care
-   
+
    If there are no GTM-worthy features, just say "No marketing-worthy features in this release."
    </task>
-   
+
    PR data: [contents of prs-${NEW_VERSION}.json]
    ```
 
-3. **Generate GTM notification:**
+3. **Generate GTM notification using this EXACT Slack-compatible format:**
+
    ```bash
-   # Save to gtm-summary-${NEW_VERSION}.md based on analysis
-   # If GTM-worthy features exist, include them with testing instructions
-   # If not, note that this is a maintenance/bug fix release
-   
-   # Check if notification is needed
-   if grep -q "No marketing-worthy features" gtm-summary-${NEW_VERSION}.md; then
-     echo "✅ No GTM notification needed for this release"
-     echo "📄 Summary saved to: gtm-summary-${NEW_VERSION}.md"
-   else
+   # Only create file if GTM-worthy features exist:
+   if [ "$GTM_FEATURES_FOUND" = "true" ]; then
+     cat > gtm-summary-${NEW_VERSION}.md << 'EOF'
+   *GTM Summary: ComfyUI Frontend v${NEW_VERSION}*
+
+   _Disclaimer: the below is AI-generated_
+
+   1. *[Feature Title]* (#[PR_NUMBER])
+       * *Author:* @[username]
+       * *Demo:* [Media Link or "No demo available"]
+       * *Why users should care:* [One compelling sentence]
+       * *Key Features:*
+           * [Feature detail 1]
+           * [Feature detail 2]
+
+   2. *[Feature Title]* (#[PR_NUMBER])
+       * *Author:* @[username]
+       * *Demo:* [Media Link]
+       * *Why users should care:* [One compelling sentence]
+       * *Key Features:*
+           * [Feature detail 1]
+           * [Feature detail 2]
+   EOF
      echo "📋 GTM summary saved to: gtm-summary-${NEW_VERSION}.md"
      echo "📤 Share this file in #gtm channel to notify the team"
+   else
+     echo "✅ No GTM notification needed for this release"
+     echo "📄 No gtm-summary file created - no marketing-worthy features"
    fi
    ```
+
+   **CRITICAL Formatting Requirements:**
+   - Use single asterisk (\*) for emphasis, NOT double (\*\*)
+   - Use underscore (\_) for italics
+   - Use 4 spaces for indentation (not tabs)
+   - Convert author names to @username format (e.g., "John Smith" → "@john")
+   - No section headers (#), no code language specifications
+   - Always include "Disclaimer: the below is AI-generated"
+   - Keep content minimal - no testing instructions, additional sections, etc.
 
 ### Step 6: Version Preview
 
 **Version Preview:**
+
 - Current: `${CURRENT_VERSION}`
 - Proposed: Show exact version number based on analysis:
   - Major version if breaking changes detected
@@ -228,37 +283,41 @@ echo "Last stable release: $LAST_STABLE"
 
 ### Step 7: Security and Dependency Audit
 
-1. Run security audit:
+1. Run pnpm security audit:
    ```bash
-   npm audit --audit-level moderate
+   pnpm audit --audit-level moderate
+   pnpm licenses ls --summary
    ```
 2. Check for known vulnerabilities in dependencies
-3. Scan for hardcoded secrets or credentials:
+3. Run comprehensive dependency health check:
+   ```bash
+   pnpm doctor
+   ```
+4. Scan for hardcoded secrets or credentials:
    ```bash
    git log -p ${BASE_TAG}..HEAD | grep -iE "(password|key|secret|token)" || echo "No sensitive data found"
    ```
-4. Verify no sensitive data in recent commits
-5. **SECURITY REVIEW**: Address any critical findings before proceeding?
+5. Verify no sensitive data in recent commits
+6. **SECURITY REVIEW**: Address any critical findings before proceeding?
 
 ### Step 8: Pre-Release Testing
 
 1. Run complete test suite:
    ```bash
-   npm run test:unit
-   npm run test:component
+   pnpm test:unit
    ```
 2. Run type checking:
    ```bash
-   npm run typecheck
+   pnpm typecheck
    ```
 3. Run linting (may have issues with missing packages):
    ```bash
-   npm run lint || echo "Lint issues - verify if critical"
+   pnpm lint || echo "Lint issues - verify if critical"
    ```
 4. Test build process:
    ```bash
-   npm run build
-   npm run build:types
+   pnpm build
+   pnpm build:types
    ```
 5. **QUALITY GATE**: All tests and builds passing?
 
@@ -278,6 +337,7 @@ echo "Last stable release: $LAST_STABLE"
    done
    ```
 3. Create standardized release notes using this exact template:
+
    ```bash
    cat > release-notes-${NEW_VERSION}.md << 'EOF'
    ## ⚠️ Breaking Changes
@@ -311,6 +371,7 @@ echo "Last stable release: $LAST_STABLE"
    **Full Changelog**: https://github.com/Comfy-Org/ComfyUI_frontend/compare/${BASE_TAG}...v${NEW_VERSION}
    EOF
    ```
+
 4. **Parse commits and populate template:**
    - Group commits by conventional commit type (feat:, fix:, chore:, etc.)
    - Extract PR numbers from commit messages
@@ -327,16 +388,19 @@ echo "Last stable release: $LAST_STABLE"
 ### Step 10: Create Version Bump PR
 
 **For standard version bumps (patch/minor/major):**
+
 ```bash
 # Trigger the workflow
-gh workflow run version-bump.yaml -f version_type=${VERSION_TYPE}
+gh workflow run release-version-bump.yaml -f version_type=${VERSION_TYPE}
 
 # Workflow runs quickly - usually creates PR within 30 seconds
 echo "Workflow triggered. Waiting for PR creation..."
 ```
 
 **For releasing a stable version:**
+
 1. Must manually create branch and update version:
+
    ```bash
    git checkout -b version-bump-${NEW_VERSION}
    # Edit package.json to remove pre-release suffix
@@ -346,23 +410,25 @@ echo "Workflow triggered. Waiting for PR creation..."
    ```
 
 2. Wait for PR creation (if using workflow) or create manually:
+
    ```bash
    # For workflow-created PRs - wait and find it
    sleep 30
    # Look for PR from comfy-pr-bot (not github-actions)
    PR_NUMBER=$(gh pr list --author comfy-pr-bot --limit 1 --json number --jq '.[0].number')
-   
+
    # Verify we got the PR
    if [ -z "$PR_NUMBER" ]; then
      echo "PR not found yet. Checking recent PRs..."
      gh pr list --limit 5 --json number,title,author
    fi
-   
+
    # For manual PRs
    gh pr create --title "${NEW_VERSION}" \
      --body-file release-notes-${NEW_VERSION}.md \
      --label "Release"
    ```
+
 3. **Update PR with release notes:**
    ```bash
    # For workflow-created PRs, update the body with our release notes
@@ -377,28 +443,21 @@ echo "Workflow triggered. Waiting for PR creation..."
    gh pr view ${PR_NUMBER} --json labels | jq -r '.labels[].name' | grep -q "Release" || \
      echo "ERROR: Release label missing! Add it immediately!"
    ```
-2. Check for update-locales commits:
-   ```bash
-   # WARNING: update-locales may add [skip ci] which blocks release workflow!
-   gh pr view ${PR_NUMBER} --json commits | grep -q "skip ci" && \
-     echo "WARNING: [skip ci] detected - release workflow may not trigger!"
-   ```
-3. Verify version number in package.json
-4. Review all changed files
-5. Ensure no unintended changes included
-6. Wait for required PR checks:
+2. Verify version number in package.json
+3. Review all changed files
+4. Ensure no unintended changes included
+5. Wait for required PR checks:
    ```bash
    gh pr checks ${PR_NUMBER} --watch
    ```
-7. **FINAL CODE REVIEW**: Release label present and no [skip ci]?
+6. **FINAL CODE REVIEW**: Release label present and no [skip ci]?
 
 ### Step 12: Pre-Merge Validation
 
 1. **Review Requirements**: Release PRs require approval
-2. Monitor CI checks - watch for update-locales
-3. **CRITICAL WARNING**: If update-locales adds [skip ci], the release workflow won't trigger!
-4. Check no new commits to main since PR creation
-5. **DEPLOYMENT READINESS**: Ready to merge?
+2. Monitor CI checks
+3. Check no new commits to main since PR creation
+4. **DEPLOYMENT READINESS**: Ready to merge?
 
 ### Step 13: Execute Release
 
@@ -410,32 +469,33 @@ echo "Workflow triggered. Waiting for PR creation..."
 3. **IMMEDIATELY CHECK**: Did release workflow trigger?
    ```bash
    sleep 10
-   gh run list --workflow=release.yaml --limit=1
+   gh run list --workflow=release-draft-create.yaml --limit=1
    ```
-4. **For Minor/Major Version Releases**: The create-release-candidate-branch workflow will automatically:
+4. **For Minor/Major Version Releases**: The release-branch-create workflow will automatically:
    - Create a `core/x.yy` branch for the PREVIOUS minor version
    - Apply branch protection rules
    - Document the feature freeze policy
    ```bash
    # Monitor branch creation (for minor/major releases)
-   gh run list --workflow=create-release-candidate-branch.yaml --limit=1
+   gh run list --workflow=release-branch-create.yaml --limit=1
    ```
-4. If workflow didn't trigger due to [skip ci]:
+5. If workflow didn't trigger due to [skip ci]:
    ```bash
    echo "ERROR: Release workflow didn't trigger!"
    echo "Options:"
    echo "1. Create patch release (e.g., 1.24.1) to trigger workflow"
    echo "2. Investigate manual release options"
    ```
-5. If workflow triggered, monitor execution:
+6. If workflow triggered, monitor execution:
    ```bash
-   WORKFLOW_RUN_ID=$(gh run list --workflow=release.yaml --limit=1 --json databaseId --jq '.[0].databaseId')
+   WORKFLOW_RUN_ID=$(gh run list --workflow=release-draft-create.yaml --limit=1 --json databaseId --jq '.[0].databaseId')
    gh run watch ${WORKFLOW_RUN_ID}
    ```
 
 ### Step 14: Enhance GitHub Release
 
 1. Wait for automatic release creation:
+
    ```bash
    # Wait for release to be created
    while ! gh release view v${NEW_VERSION} >/dev/null 2>&1; do
@@ -445,13 +505,14 @@ echo "Workflow triggered. Waiting for PR creation..."
    ```
 
 2. **Enhance the GitHub release:**
+
    ```bash
    # Update release with our release notes
    gh release edit v${NEW_VERSION} \
      --title "🚀 ComfyUI Frontend v${NEW_VERSION}" \
      --notes-file release-notes-${NEW_VERSION}.md \
      --latest
-   
+
    # Add any additional assets if needed
    # gh release upload v${NEW_VERSION} additional-assets.zip
    ```
@@ -464,14 +525,17 @@ echo "Workflow triggered. Waiting for PR creation..."
 ### Step 15: Verify Multi-Channel Distribution
 
 1. **GitHub Release:**
+
    ```bash
    gh release view v${NEW_VERSION} --json assets,body,createdAt,tagName
    ```
+
    - ✅ Check release notes
    - ✅ Verify dist.zip attachment
    - ✅ Confirm release marked as latest (for main branch)
 
 2. **PyPI Package:**
+
    ```bash
    # Check PyPI availability (may take a few minutes)
    for i in {1..10}; do
@@ -485,10 +549,11 @@ echo "Workflow triggered. Waiting for PR creation..."
    ```
 
 3. **npm Package:**
+
    ```bash
    # Check npm availability
    for i in {1..10}; do
-     if npm view @comfyorg/comfyui-frontend-types@${NEW_VERSION} version >/dev/null 2>&1; then
+     if pnpm view @comfyorg/comfyui-frontend-types@${NEW_VERSION} version >/dev/null 2>&1; then
        echo "✅ npm package available"
        break
      fi
@@ -502,15 +567,17 @@ echo "Workflow triggered. Waiting for PR creation..."
 ### Step 16: Post-Release Monitoring Setup
 
 1. **Monitor immediate release health:**
+
    ```bash
    # Check for immediate issues
    gh issue list --label "bug" --state open --limit 5 --json title,number,createdAt
-   
+
    # Monitor download metrics (if accessible)
    gh release view v${NEW_VERSION} --json assets --jq '.assets[].downloadCount'
    ```
 
 2. **Update documentation tracking:**
+
    ```bash
    cat > post-release-checklist.md << EOF
    # Post-Release Checklist for v${NEW_VERSION}
@@ -541,6 +608,7 @@ echo "Workflow triggered. Waiting for PR creation..."
    ```
 
 3. **Create release summary:**
+
    ```bash
    cat > release-summary-${NEW_VERSION}.md << EOF
    # Release Summary: ComfyUI Frontend v${NEW_VERSION}
@@ -578,6 +646,7 @@ echo "Workflow triggered. Waiting for PR creation..."
 ### Step 17: Create Release Summary
 
 1. **Create comprehensive release summary:**
+
    ```bash
    cat > release-summary-${NEW_VERSION}.md << EOF
    # Release Summary: ComfyUI Frontend v${NEW_VERSION}
@@ -617,6 +686,7 @@ echo "Workflow triggered. Waiting for PR creation..."
 ### Rollback Procedures
 
 **Pre-Merge Rollback:**
+
 ```bash
 # Close version bump PR and reset
 gh pr close ${PR_NUMBER}
@@ -625,6 +695,7 @@ git clean -fd
 ```
 
 **Post-Merge Rollback:**
+
 ```bash
 # Create immediate patch release with reverts
 git revert ${RELEASE_COMMIT}
@@ -632,6 +703,7 @@ git revert ${RELEASE_COMMIT}
 ```
 
 **Emergency Procedures:**
+
 ```bash
 # Document incident
 cat > release-incident-${NEW_VERSION}.md << EOF
@@ -665,31 +737,39 @@ The command implements multiple quality gates:
 ## Common Scenarios
 
 ### Scenario 1: Regular Feature Release
+
 ```bash
 /project:create-frontend-release minor
 ```
+
 - Analyzes features since last release
 - Generates changelog automatically
 - Creates comprehensive release notes
 
 ### Scenario 2: Critical Security Patch
+
 ```bash
 /project:create-frontend-release patch "Security fixes for CVE-2024-XXXX"
 ```
+
 - Expedited security scanning
 - Enhanced monitoring setup
 
 ### Scenario 3: Major Version with Breaking Changes
+
 ```bash
 /project:create-frontend-release major
 ```
+
 - Comprehensive breaking change analysis
 - Migration guide generation
 
 ### Scenario 4: Pre-release Testing
+
 ```bash
 /project:create-frontend-release prerelease
 ```
+
 - Creates alpha/beta/rc versions
 - Draft release status
 - Python package specs require that prereleases use alpha/beta/rc as the preid
@@ -699,10 +779,12 @@ The command implements multiple quality gates:
 When executing this release process, pay attention to these key aspects:
 
 ### Version Handling
+
 - For pre-release versions (e.g., 1.24.0-rc.1), the next stable release should be the same version without the suffix (1.24.0)
 - Never skip version numbers - follow semantic versioning strictly
 
 ### Commit History Analysis
+
 - **ALWAYS** use `--first-parent` flag with git log to avoid including commits from merged feature branches
 - Verify PR merge targets before including them in changelogs:
   ```bash
@@ -710,6 +792,7 @@ When executing this release process, pay attention to these key aspects:
   ```
 
 ### Release Workflow Triggers
+
 - The "Release" label on the PR is **CRITICAL** - without it, PyPI/npm publishing won't occur
 - Check for `[skip ci]` in commit messages before merging - this blocks the release workflow
 - If you encounter `[skip ci]`, push an empty commit to override it:
@@ -718,11 +801,13 @@ When executing this release process, pay attention to these key aspects:
   ```
 
 ### PR Creation Details
+
 - Version bump PRs come from `comfy-pr-bot`, not `github-actions`
 - The workflow typically completes in 20-30 seconds
 - Always wait for the PR to be created before trying to edit it
 
 ### Breaking Changes Detection
+
 - Analyze changes to public-facing APIs:
   - The `app` object and its methods
   - The `api` module exports
@@ -731,9 +816,10 @@ When executing this release process, pay attention to these key aspects:
 - Any modifications to these require marking as breaking changes
 
 ### Recovery Procedures
+
 If the release workflow fails to trigger:
+
 1. Create a revert PR to restore the previous version
 2. Merge the revert
 3. Re-run the version bump workflow
 4. This approach is cleaner than creating extra version numbers
-

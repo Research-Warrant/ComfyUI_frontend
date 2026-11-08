@@ -1,18 +1,32 @@
-import { Component } from 'vue'
+import type { Component } from 'vue'
 
-import type { useDialogService } from '@/services/dialogService'
-import type { ComfyCommand } from '@/stores/commandStore'
+import type { ToastId } from '@/types/toastId'
+import type { ToastAction, ToastOptions } from '@/types/toastOptions'
 
-export interface BaseSidebarTabExtension {
+import type { WorkflowStore } from '@/platform/workflow/management/stores/workflowStoreTypes'
+import type { ExecutionErrorWsMessage } from '@comfyorg/api-client/executionTypes'
+import type { NodeError } from '@comfyorg/api-client/types'
+import type { ExtensionDialogService } from '@/services/dialogServiceTypes'
+import type { ComfyCommand } from '@comfyorg/keybindings/commandStore'
+
+export interface ExtensionProvenance {
+  createdBy: 'comfy-agent'
+  threadId?: string
+  createdAt?: string
+  summary?: string
+}
+
+interface BaseSidebarTabExtension {
   id: string
   title: string
   icon?: string | Component
   iconBadge?: string | (() => string | null)
   tooltip?: string
   label?: string
+  onToggle?: () => boolean | Promise<boolean>
 }
 
-export interface BaseBottomPanelExtension {
+interface BaseBottomPanelExtension {
   id: string
   title?: string // For extensions that provide static titles
   titleKey?: string // For core tabs with i18n keys
@@ -32,71 +46,43 @@ export interface CustomExtension {
   destroy?: () => void
 }
 
-export type VueSidebarTabExtension = BaseSidebarTabExtension & VueExtension
-export type CustomSidebarTabExtension = BaseSidebarTabExtension &
-  CustomExtension
+type VueSidebarTabExtension = BaseSidebarTabExtension & VueExtension
+type CustomSidebarTabExtension = BaseSidebarTabExtension & CustomExtension
 export type SidebarTabExtension =
   | VueSidebarTabExtension
   | CustomSidebarTabExtension
 
-export type VueBottomPanelExtension = BaseBottomPanelExtension & VueExtension
-export type CustomBottomPanelExtension = BaseBottomPanelExtension &
-  CustomExtension
+type VueBottomPanelExtension = BaseBottomPanelExtension & VueExtension
+type CustomBottomPanelExtension = BaseBottomPanelExtension & CustomExtension
 export type BottomPanelExtension =
   | VueBottomPanelExtension
   | CustomBottomPanelExtension
 
+export type { ToastAction, ToastOptions }
+
 /**
- * Defines message options in Toast component.
+ * @deprecated Use `toast.success/error/info/warning/loading(title, options)`.
  */
 export interface ToastMessageOptions {
-  /**
-   * Severity level of the message.
-   * @defaultValue info
-   */
-  severity?:
-    | 'success'
-    | 'info'
-    | 'warn'
-    | 'error'
-    | 'secondary'
-    | 'contrast'
-    | undefined
-  /**
-   * Summary content of the message.
-   */
-  summary?: string | undefined
-  /**
-   * Detail content of the message.
-   */
-  detail?: any | undefined
-  /**
-   * Whether the message can be closed manually using the close icon.
-   * @defaultValue true
-   */
-  closable?: boolean | undefined
-  /**
-   * Delay in milliseconds to close the message automatically.
-   */
-  life?: number | undefined
-  /**
-   * Key of the Toast to display the message.
-   */
-  group?: string | undefined
-  /**
-   * Style class of the message.
-   */
-  styleClass?: any
-  /**
-   * Style class of the content.
-   */
-  contentStyleClass?: any
+  closable?: boolean
+  detail?: string
+  life?: number
+  severity?: 'success' | 'info' | 'warn' | 'error' | 'secondary' | 'contrast'
+  summary?: string
 }
 
 export type ToastManager = {
+  /** @deprecated Use `success/error/info/warning/loading`. */
   add(message: ToastMessageOptions): void
-  remove(message: ToastMessageOptions): void
-  removeAll(): void
+  /** @deprecated Use `warning(message)`. */
+  addAlert(message: string): void
+  dismiss(id: ToastId): boolean
+  dismissAll(): void
+  error(title: string, options?: ToastOptions): ToastId
+  info(title: string, options?: ToastOptions): ToastId
+  loading(title: string, options?: ToastOptions): ToastId
+  success(title: string, options?: ToastOptions): ToastId
+  warning(title: string, options?: ToastOptions): ToastId
 }
 
 export interface ExtensionManager {
@@ -106,15 +92,35 @@ export interface ExtensionManager {
   getSidebarTabs(): SidebarTabExtension[]
 
   toast: ToastManager
-  dialog: ReturnType<typeof useDialogService>
+  dialog: ExtensionDialogService
   command: CommandManager
   setting: {
-    get: (id: string) => any
-    set: (id: string, value: any) => void
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Custom extensions declare settings outside the generated schema.
+    get: <T = unknown>(id: string) => T | undefined
+    set: (id: string, value: unknown) => void
   }
+  workflow: WorkflowStore
+
+  // Execution error state (read-only)
+  lastNodeErrors: Record<string, NodeError> | null
+  lastExecutionError: ExecutionErrorWsMessage | null
+
+  /**
+   * Renders a markdown string to sanitized HTML.
+   * Uses marked (GFM) + DOMPurify. Safe for direct use with innerHTML.
+   * @param markdown - The markdown string to render.
+   * @param baseUrl - Optional base URL for resolving relative image/media paths.
+   */
+  renderMarkdownToHtml(markdown: string, baseUrl?: string): string
 }
 
 export interface CommandManager {
   commands: ComfyCommand[]
-  execute(command: string, errorHandler?: (error: any) => void): void
+  execute(
+    command: string,
+    options?: {
+      errorHandler?: (error: unknown) => void
+      metadata?: Record<string, unknown>
+    }
+  ): void
 }

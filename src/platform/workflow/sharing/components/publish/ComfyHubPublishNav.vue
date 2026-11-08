@@ -1,0 +1,123 @@
+<template>
+  <nav data-testid="publish-nav" class="flex flex-col gap-6 px-3 py-4">
+    <ol class="flex list-none flex-col p-0">
+      <li
+        v-for="step in steps"
+        :key="step.name"
+        v-auto-animate
+        :aria-current="isCurrentStep(step.name) ? 'step' : undefined"
+        :class="
+          cn(
+            isProfileCreationFlow &&
+              step.name === 'finish' &&
+              'rounded-lg bg-accent'
+          )
+        "
+      >
+        <Button
+          variant="textonly"
+          size="unset"
+          :class="
+            cn(
+              'h-10 w-full justify-start rounded-lg px-4 py-3 text-left',
+              isCurrentStep(step.name) &&
+                !(isProfileCreationFlow && step.name === 'finish')
+                ? 'bg-muted'
+                : 'hover:bg-accent'
+            )
+          "
+          @click="$emit('stepClick', step.name)"
+        >
+          <Badge
+            variant="circle"
+            severity="contrast"
+            :class="
+              cn(
+                'size-5 border bg-transparent text-xs font-bold',
+                isCurrentStep(step.name)
+                  ? 'border-foreground bg-foreground text-background'
+                  : isCompletedStep(step.name)
+                    ? 'border-foreground text-foreground'
+                    : 'border-muted-foreground text-muted-foreground'
+              )
+            "
+          >
+            {{ step.number }}
+          </Badge>
+          <span class="truncate text-sm text-foreground">
+            {{ step.label }}
+          </span>
+        </Button>
+
+        <div
+          v-if="isProfileCreationFlow && step.name === 'finish'"
+          v-auto-animate
+          class="flex h-10 w-full items-center rounded-lg bg-muted pl-11 select-none"
+        >
+          <span class="truncate text-sm text-foreground">
+            {{ $t('comfyHubProfile.profileCreationNav') }}
+          </span>
+        </div>
+      </li>
+    </ol>
+  </nav>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+
+import { vAutoAnimate } from '@formkit/auto-animate/vue'
+
+import Badge from '@comfyorg/design-system/badge/Badge'
+import Button from '@comfyorg/design-system/button/Button'
+import type { ComfyHubPublishStep } from '@/platform/workflow/sharing/composables/useComfyHubPublishWizard'
+import { cn } from '@comfyorg/tailwind-utils'
+import { useI18n } from 'vue-i18n'
+
+type ComfyHubPrimaryStep = Exclude<ComfyHubPublishStep, 'profileCreation'>
+
+const { currentStep } = defineProps<{
+  currentStep: ComfyHubPublishStep
+}>()
+
+defineEmits<{
+  stepClick: [step: ComfyHubPrimaryStep]
+}>()
+
+const { t } = useI18n()
+
+const steps = [
+  {
+    name: 'describe' as const,
+    number: 1,
+    label: t('comfyHubPublish.stepDescribe')
+  },
+  {
+    name: 'examples' as const,
+    number: 2,
+    label: t('comfyHubPublish.stepExamples')
+  },
+  { name: 'finish' as const, number: 3, label: t('comfyHubPublish.stepFinish') }
+]
+
+const isProfileCreationFlow = computed(() => currentStep === 'profileCreation')
+
+const currentStepNumber = computed(() => {
+  if (isProfileCreationFlow.value) {
+    return 3
+  }
+
+  return steps.find((step) => step.name === currentStep)?.number ?? 0
+})
+
+function isCurrentStep(stepName: ComfyHubPrimaryStep) {
+  return currentStep === stepName
+}
+
+function isCompletedStep(stepName: ComfyHubPrimaryStep) {
+  return (
+    (steps.find((step) => step.name === stepName)?.number ?? 0) <
+    currentStepNumber.value
+  )
+}
+</script>

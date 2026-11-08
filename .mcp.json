@@ -1,12 +1,8 @@
 {
   "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": ["-y", "@executeautomation/playwright-mcp-server"]
-    },
-    "context7": {
-      "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+    "playwright-test": {
+      "command": "pnpm",
+      "args": ["dlx", "@playwright/mcp@0.0.68"]
     }
   }
 }

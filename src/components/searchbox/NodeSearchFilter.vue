@@ -1,46 +1,55 @@
 <template>
-  <div class="_content">
-    <SelectButton
-      v-model="selectedFilter"
-      class="filter-type-select"
-      :options="filters"
+  <div class="flex flex-col gap-2">
+    <ToggleGroup
+      v-model="selectedFilterName"
+      type="single"
       :allow-empty="false"
-      option-label="name"
-      @change="updateSelectedFilterValue"
-    />
-    <Select
+    >
+      <ToggleGroupItem
+        v-for="filter in filters"
+        :key="filter.name"
+        :value="filter.name"
+      >
+        {{ filter.name }}
+      </ToggleGroupItem>
+    </ToggleGroup>
+    <AppSingleSelect
       v-model="selectedFilterValue"
-      class="filter-value-select"
       :options="filterValues"
-      filter
-      auto-filter-focus
+      searchable
     />
   </div>
-  <div class="_footer">
-    <Button type="button" :label="$t('g.add')" @click="submit" />
+  <div class="flex flex-col items-end pt-4">
+    <Button type="button" @click="submit">{{ $t('g.add') }}</Button>
   </div>
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import Select from 'primevue/select'
-import SelectButton from 'primevue/selectbutton'
-import { computed, onMounted, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
-import { ComfyNodeDefImpl, useNodeDefStore } from '@/stores/nodeDefStore'
-import { FuseFilter, FuseFilterWithValue } from '@/utils/fuseUtil'
-
-const filters = computed(() => nodeDefStore.nodeSearchService.nodeFilters)
-const selectedFilter = ref<FuseFilter<ComfyNodeDefImpl, string>>()
-const filterValues = computed(() => selectedFilter.value?.fuseSearch.data ?? [])
-const selectedFilterValue = ref<string>('')
+import Button from '@comfyorg/design-system/button/Button'
+import AppSingleSelect from '@/components/common/AppSingleSelect.vue'
+import ToggleGroup from '@comfyorg/design-system/toggle-group/ToggleGroup'
+import ToggleGroupItem from '@comfyorg/design-system/toggle-group/ToggleGroupItem'
+import type { ComfyNodeDefImpl } from '@/core/graph/nodeDef/ComfyNodeDefImpl'
+import { useNodeDefStore } from '@/stores/nodeDefStore'
+import type { FuseFilter, FuseFilterWithValue } from '@/utils/fuseUtil'
 
 const nodeDefStore = useNodeDefStore()
-
-onMounted(() => {
-  selectedFilter.value = nodeDefStore.nodeSearchService.nodeFilters[0]
-  updateSelectedFilterValue()
-})
+const filters = computed(() => nodeDefStore.nodeSearchService.nodeFilters)
+const selectedFilterName = ref(filters.value[0]?.name)
+const selectedFilter = computed<
+  FuseFilter<ComfyNodeDefImpl, string> | undefined
+>(() =>
+  filters.value.find((filter) => filter.name === selectedFilterName.value)
+)
+const filterValues = computed(() =>
+  (selectedFilter.value?.fuseSearch.data ?? []).map((value) => ({
+    name: value,
+    value
+  }))
+)
+const selectedFilterValue = ref<string>('')
 
 const emit = defineEmits<{
   (
@@ -50,11 +59,15 @@ const emit = defineEmits<{
 }>()
 
 const updateSelectedFilterValue = () => {
-  if (filterValues.value.includes(selectedFilterValue.value)) {
+  if (
+    filterValues.value.some(({ value }) => value === selectedFilterValue.value)
+  ) {
     return
   }
-  selectedFilterValue.value = filterValues.value[0]
+  selectedFilterValue.value = String(filterValues.value[0]?.value ?? '')
 }
+
+watch(selectedFilterName, updateSelectedFilterValue, { immediate: true })
 
 const submit = () => {
   if (!selectedFilter.value) {
@@ -66,13 +79,3 @@ const submit = () => {
   })
 }
 </script>
-
-<style scoped>
-._content {
-  @apply flex flex-col space-y-2;
-}
-
-._footer {
-  @apply flex flex-col pt-4 items-end;
-}
-</style>

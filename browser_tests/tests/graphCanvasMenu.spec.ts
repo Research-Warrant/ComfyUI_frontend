@@ -1,39 +1,96 @@
 import { expect } from '@playwright/test'
 
-import { comfyPageFixture as test } from '../fixtures/ComfyPage'
+import { comfyPageFixture as test } from '@e2e/fixtures/ComfyPage'
+import { TestIds } from '@e2e/fixtures/selectors'
+import { screenshotRegion } from '@e2e/fixtures/utils/screenshotRegion'
 
-test.describe('Graph Canvas Menu', () => {
-  test.beforeEach(async ({ comfyPage }) => {
-    // Set link render mode to spline to make sure it's not affected by other tests'
-    // side effects.
-    await comfyPage.setSetting('Comfy.LinkRenderMode', 2)
+test.describe('Graph Canvas Menu', { tag: ['@screenshot', '@canvas'] }, () => {
+  test.use({
+    initialSettings: {
+      'Comfy.UseNewMenu': 'Disabled',
+      // Enable canvas menu for all tests
+      'Comfy.Graph.CanvasMenu': true
+    }
   })
 
-  test('Can toggle link visibility', async ({ comfyPage }) => {
-    // Note: `Comfy.Graph.CanvasMenu` is disabled in comfyPage setup.
-    // so no cleanup is needed.
-    await comfyPage.setSetting('Comfy.Graph.CanvasMenu', true)
+  test(
+    'Can toggle link visibility',
+    { tag: '@screenshot' },
+    async ({ comfyPage }) => {
+      const button = comfyPage.page.getByTestId(
+        TestIds.canvas.toggleLinkVisibilityButton
+      )
+      const region = await screenshotRegion(
+        comfyPage.page,
+        await comfyPage.nodeOps.getAllNodeRefs()
+      )
+      await button.click()
+      await comfyPage.nextFrame()
+      await region.expectScreenshot('canvas-with-hidden-links.png')
+      const hiddenLinkRenderMode = await comfyPage.page.evaluate(() => {
+        return window.LiteGraph!.HIDDEN_LINK
+      })
+      await expect
+        .poll(() => comfyPage.settings.getSetting('Comfy.LinkRenderMode'))
+        .toBe(hiddenLinkRenderMode)
 
-    const button = comfyPage.page.getByTestId('toggle-link-visibility-button')
-    await button.click()
-    await comfyPage.nextFrame()
-    await expect(comfyPage.canvas).toHaveScreenshot(
-      'canvas-with-hidden-links.png'
+      await button.click()
+      await comfyPage.nextFrame()
+      await region.expectScreenshot('canvas-with-visible-links.png')
+      await expect
+        .poll(() => comfyPage.settings.getSetting('Comfy.LinkRenderMode'))
+        .not.toBe(hiddenLinkRenderMode)
+    }
+  )
+
+  test('Toggle minimap button is clickable and has correct test id', async ({
+    comfyPage
+  }) => {
+    const minimapButton = comfyPage.page.getByTestId(
+      TestIds.canvas.toggleMinimapButton
     )
-    const hiddenLinkRenderMode = await comfyPage.page.evaluate(() => {
-      return window['LiteGraph'].HIDDEN_LINK
+    await expect(minimapButton).toBeVisible()
+    await expect(minimapButton).toBeEnabled()
+
+    // Test that the button can be clicked without error
+    await minimapButton.click()
+    await comfyPage.nextFrame()
+  })
+
+  test('Fit view button is present and clickable', async ({ comfyPage }) => {
+    const fitViewButton = comfyPage.page
+      .locator('button')
+      .filter({ has: comfyPage.page.locator('.icon-\\[lucide--focus\\]') })
+    await expect(fitViewButton).toBeVisible()
+    await fitViewButton.click()
+    await comfyPage.nextFrame()
+  })
+
+  test('Zoom controls popup opens and closes', async ({ comfyPage }) => {
+    // Find the zoom button by its percentage text content
+    const zoomButton = comfyPage.page.locator('button').filter({
+      hasText: '%'
     })
-    expect(await comfyPage.getSetting('Comfy.LinkRenderMode')).toBe(
-      hiddenLinkRenderMode
-    )
+    await expect(zoomButton).toBeVisible()
 
-    await button.click()
+    // Click to open zoom controls
+    await zoomButton.click()
     await comfyPage.nextFrame()
-    await expect(comfyPage.canvas).toHaveScreenshot(
-      'canvas-with-visible-links.png'
-    )
-    expect(await comfyPage.getSetting('Comfy.LinkRenderMode')).not.toBe(
-      hiddenLinkRenderMode
-    )
+
+    // Zoom controls modal should be visible
+    const zoomModal = comfyPage.page
+      .locator('div')
+      .filter({
+        hasText: 'Zoom To Fit'
+      })
+      .first()
+    await expect(zoomModal).toBeVisible()
+
+    // Click backdrop to close
+    const backdrop = comfyPage.page.locator('.fixed.inset-0').first()
+    await backdrop.click()
+
+    // Modal should be hidden
+    await expect(zoomModal).toBeHidden()
   })
 })

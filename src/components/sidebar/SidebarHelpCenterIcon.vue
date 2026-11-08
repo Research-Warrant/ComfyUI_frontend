@@ -1,160 +1,80 @@
 <template>
-  <div>
-    <SidebarIcon
-      icon="pi pi-question-circle"
-      class="comfy-help-center-btn"
-      :tooltip="$t('sideToolbar.helpCenter')"
-      :icon-badge="shouldShowRedDot ? '•' : ''"
-      @click="toggleHelpCenter"
-    />
-
-    <!-- Help Center Popup positioned within canvas area -->
-    <Teleport to="#graph-canvas-container">
+  <PopoverRoot v-if="linearMode">
+    <PopoverTrigger as-child>
+      <SidebarIcon
+        icon="icon-[lucide--circle-question-mark] scale-90"
+        class="comfy-help-center-btn"
+        data-testid="help-center-button"
+        :label="$t('menu.help')"
+        :tooltip="$t('linearMode.giveFeedback')"
+        :is-small
+      />
+    </PopoverTrigger>
+    <PopoverContent
+      :side="sidebarOnLeft ? 'right' : 'left'"
+      :side-offset="8"
+      dismiss-on-viewport-change
+      class="w-auto overflow-visible rounded-lg border-border/50 p-2 shadow-sm"
+    >
       <div
-        v-if="isHelpCenterVisible"
-        class="help-center-popup"
-        :class="{
-          'sidebar-left': sidebarLocation === 'left',
-          'sidebar-right': sidebarLocation === 'right',
-          'small-sidebar': sidebarSize === 'small'
-        }"
+        v-if="typeformError || !isValidTypeformId"
+        class="p-4 text-sm text-destructive"
       >
-        <HelpCenterMenuContent @close="closeHelpCenter" />
+        {{ $t('linearMode.feedbackLoadError') }}
       </div>
-    </Teleport>
-
-    <!-- Release Notification Toast positioned within canvas area -->
-    <Teleport to="#graph-canvas-container">
-      <ReleaseNotificationToast
-        :class="{
-          'sidebar-left': sidebarLocation === 'left',
-          'sidebar-right': sidebarLocation === 'right',
-          'small-sidebar': sidebarSize === 'small'
-        }"
-      />
-    </Teleport>
-
-    <!-- WhatsNew Popup positioned within canvas area -->
-    <Teleport to="#graph-canvas-container">
-      <WhatsNewPopup
-        :class="{
-          'sidebar-left': sidebarLocation === 'left',
-          'sidebar-right': sidebarLocation === 'right',
-          'small-sidebar': sidebarSize === 'small'
-        }"
-      />
-    </Teleport>
-
-    <!-- Backdrop to close popup when clicking outside -->
-    <Teleport to="body">
       <div
-        v-if="isHelpCenterVisible"
-        class="help-center-backdrop"
-        @click="closeHelpCenter"
+        v-else
+        ref="feedbackRef"
+        data-testid="feedback-embed"
+        data-tf-auto-resize
+        :data-tf-widget="APP_MODE_FEEDBACK_TYPEFORM_ID"
       />
-    </Teleport>
-  </div>
+      <PopoverArrow class="fill-background stroke-border/50" />
+    </PopoverContent>
+  </PopoverRoot>
+  <SidebarIcon
+    v-else
+    icon="icon-[lucide--circle-question-mark] scale-90"
+    class="comfy-help-center-btn"
+    data-testid="help-center-button"
+    :label="$t('menu.help')"
+    :tooltip="$t('sideToolbar.helpCenter')"
+    :icon-badge="shouldShowRedDot ? '•' : ''"
+    badge-class="-top-1 -right-1 min-w-2 w-2 h-2 p-0 rounded-full text-[0px] bg-[#ff3b30]"
+    :is-small
+    @click="toggleHelpCenter()"
+  />
 </template>
 
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onMounted } from 'vue'
+import { computed, useTemplateRef } from 'vue'
 
-import HelpCenterMenuContent from '@/components/helpcenter/HelpCenterMenuContent.vue'
-import ReleaseNotificationToast from '@/components/helpcenter/ReleaseNotificationToast.vue'
-import WhatsNewPopup from '@/components/helpcenter/WhatsNewPopup.vue'
-import { useHelpCenterStore } from '@/stores/helpCenterStore'
-import { useReleaseStore } from '@/stores/releaseStore'
-import { useSettingStore } from '@/stores/settingStore'
+import { PopoverArrow, PopoverRoot, PopoverTrigger } from 'reka-ui'
+import PopoverContent from '@comfyorg/design-system/popover/PopoverContent'
+import { useHelpCenter } from '@/composables/useHelpCenter'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { APP_MODE_FEEDBACK_TYPEFORM_ID } from '@/platform/surveys/appModeFeedback'
+import { useTypeformEmbed } from '@/platform/surveys/useTypeformEmbed'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
 
 import SidebarIcon from './SidebarIcon.vue'
 
-const settingStore = useSettingStore()
-const releaseStore = useReleaseStore()
-const helpCenterStore = useHelpCenterStore()
-const { shouldShowRedDot } = storeToRefs(releaseStore)
-const { isVisible: isHelpCenterVisible } = storeToRefs(helpCenterStore)
+defineProps<{
+  isSmall: boolean
+}>()
 
-const sidebarLocation = computed(() =>
-  settingStore.get('Comfy.Sidebar.Location')
+const { shouldShowRedDot, toggleHelpCenter } = useHelpCenter()
+const { linearMode } = storeToRefs(useCanvasStore())
+
+const settingStore = useSettingStore()
+const sidebarOnLeft = computed(
+  () => settingStore.get('Comfy.Sidebar.Location') === 'left'
 )
 
-const sidebarSize = computed(() => settingStore.get('Comfy.Sidebar.Size'))
-
-const toggleHelpCenter = () => {
-  helpCenterStore.toggle()
-}
-
-const closeHelpCenter = () => {
-  helpCenterStore.hide()
-}
-
-// Initialize release store on mount
-onMounted(async () => {
-  // Initialize release store to fetch releases for toast and popup
-  await releaseStore.initialize()
-})
+const feedbackRef = useTemplateRef<HTMLDivElement>('feedbackRef')
+const { typeformError, isValidTypeformId } = useTypeformEmbed(
+  feedbackRef,
+  APP_MODE_FEEDBACK_TYPEFORM_ID
+)
 </script>
-
-<style scoped>
-.help-center-backdrop {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 9999;
-  background: transparent;
-}
-
-.help-center-popup {
-  position: absolute;
-  bottom: 1rem;
-  z-index: 10000;
-  animation: slideInUp 0.2s ease-out;
-  pointer-events: auto;
-}
-
-.help-center-popup.sidebar-left {
-  left: 1rem;
-}
-
-.help-center-popup.sidebar-left.small-sidebar {
-  left: 1rem;
-}
-
-.help-center-popup.sidebar-right {
-  right: 1rem;
-}
-
-@keyframes slideInUp {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-:deep(.p-badge) {
-  background: #ff3b30;
-  color: #ff3b30;
-  min-width: 8px;
-  height: 8px;
-  padding: 0;
-  border-radius: 9999px;
-  font-size: 0;
-  margin-top: 4px;
-  margin-right: 4px;
-  border: none;
-  outline: none;
-  box-shadow: none;
-}
-
-:deep(.p-badge.p-badge-dot) {
-  width: 8px !important;
-}
-</style>

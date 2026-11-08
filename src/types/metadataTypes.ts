@@ -1,7 +1,7 @@
 import type {
   ComfyApiWorkflow,
   ComfyWorkflowJSON
-} from '@/schemas/comfyWorkflowSchema'
+} from '@comfyorg/graph-model/workflowSchema'
 
 /**
  * Tag names used in ComfyUI metadata
@@ -66,20 +66,6 @@ export type GltfChunkHeader = {
   chunkTypeIdentifier: number
 }
 
-export type GltfExtras = {
-  workflow?: string | object
-  prompt?: string | object
-  [key: string]: any
-}
-
-export type GltfJsonData = {
-  asset?: {
-    extras?: GltfExtras
-    [key: string]: any
-  }
-  [key: string]: any
-}
-
 /**
  * Represents the content range [start, end) of an ISOBMFF box, excluding its header.
  * Null if the box was not found.
@@ -112,12 +98,12 @@ export type AvifIinfBox = {
   entries: AvifInfeBox[]
 }
 
-export type AvifIlocItemExtent = {
+type AvifIlocItemExtent = {
   extent_offset: number
   extent_length: number
 }
 
-export type AvifIlocItem = {
+type AvifIlocItem = {
   item_ID: number
   data_reference_index: number
   base_offset: number

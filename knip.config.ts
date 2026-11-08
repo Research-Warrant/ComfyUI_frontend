@@ -1,82 +1,120 @@
 import type { KnipConfig } from 'knip'
 
 const config: KnipConfig = {
-  entry: [
-    'src/main.ts',
-    'vite.config.mts',
-    'vite.electron.config.mts',
-    'vite.types.config.mts',
-    'eslint.config.js',
-    'tailwind.config.js',
-    'postcss.config.js',
-    'playwright.config.ts',
-    'playwright.i18n.config.ts',
-    'vitest.config.ts',
-    'scripts/**/*.{js,ts}'
-  ],
-  project: [
-    'src/**/*.{js,ts,vue}',
-    'tests-ui/**/*.{js,ts,vue}',
-    'browser_tests/**/*.{js,ts}',
-    'scripts/**/*.{js,ts}'
-  ],
-  ignore: [
-    // Generated files
-    'dist/**',
-    'types/**',
-    'node_modules/**',
-    // Config files that might not show direct usage
-    '.husky/**',
-    // Temporary or cache files
-    '.vite/**',
-    'coverage/**',
-    // i18n config
-    '.i18nrc.cjs',
-    // Test setup files
-    'browser_tests/globalSetup.ts',
-    'browser_tests/globalTeardown.ts',
-    'browser_tests/utils/**',
-    // Scripts
-    'scripts/**',
-    // Vite config files
-    'vite.electron.config.mts',
-    'vite.types.config.mts',
-    // Auto generated manager types
-    'src/types/generatedManagerTypes.ts',
-    // Design system components (may not be used immediately)
-    'src/components/button/IconGroup.vue',
-    'src/components/button/MoreButton.vue',
-    'src/components/button/TextButton.vue',
-    'src/components/card/CardTitle.vue',
-    'src/components/card/CardDescription.vue',
-    'src/components/input/SingleSelect.vue'
-  ],
-  ignoreExportsUsedInFile: true,
-  // Vue-specific configuration
-  vue: true,
-  // Only check for unused files, disable all other rules
-  // TODO: Gradually enable other rules - see https://github.com/Comfy-Org/ComfyUI_frontend/issues/4888
-  rules: {
-    binaries: 'off',
-    classMembers: 'off',
-    dependencies: 'off',
-    devDependencies: 'off',
-    duplicates: 'off',
-    enumMembers: 'off',
-    exports: 'off',
-    nsExports: 'off',
-    nsTypes: 'off',
-    types: 'off',
-    unlisted: 'off'
-  },
-  // Include dependencies analysis
-  includeEntryExports: true,
-  // Workspace configuration for monorepo-like structure
+  treatConfigHintsAsErrors: true,
+  treatTagHintsAsErrors: true,
   workspaces: {
     '.': {
-      entry: ['src/main.ts']
+      entry: [
+        '{build,scripts}/**/*.{js,ts}',
+        'vitest.matrix.config.mts',
+        'src/assets/css/style.css',
+        'src/scripts/ui/menu/index.ts',
+        'src/types/index.ts',
+        'src/storybook/mocks/**/*.ts',
+        'tools/oxlint-plugins/comfyIngestTypes.ts',
+        'tools/oxlint-plugins/serverFacts.ts',
+        'tools/oxlint-plugins/vitestCleanup.ts'
+      ],
+      project: [
+        '**/*.{js,ts}',
+        'src/**/*.vue!',
+        '*.{js,ts,mts}',
+        '!.claude/**',
+        '!worktrees/**',
+        '!src/__ecs_matrix__/**'
+      ],
+      ignore: ['scripts/registry-census/detection-proof/**']
+    },
+    'packages/account-core': {
+      project: ['src/**/*.{js,ts}']
+    },
+    'packages/account-ui': {
+      project: ['src/**/*.{js,ts,vue}']
+    },
+    'packages/billing-contract': {
+      project: ['src/**/*.ts']
+    },
+    'packages/api-client': {
+      project: ['src/**/*.ts']
+    },
+    'packages/graph-model': {
+      project: ['src/**/*.ts']
+    },
+    'packages/keybindings': {
+      project: ['src/**/*.ts']
+    },
+    'packages/settings-core': {
+      project: ['src/**/*.ts']
+    },
+    'packages/design-system': {
+      entry: ['tests/consumer/vite.config.ts'],
+      project: ['src/**/*.{css,js,ts,vue}'],
+      ignoreDependencies: ['tailwind-merge']
+    },
+    'packages/tailwind-utils': {
+      project: ['src/**/*.{js,ts}']
+    },
+    'packages/test-utils': {
+      project: ['src/**/*.ts']
+    },
+    'packages/shared-frontend-utils': {
+      project: ['src/**/*.{js,ts}']
+    },
+    'packages/registry-types': {
+      project: ['src/**/*.{js,ts}']
+    },
+    'packages/ingest-types': {
+      project: ['src/**/*.{js,ts}']
+    },
+    'packages/comfyui-api-types': {
+      project: ['src/**/*.ts']
+    },
+    'tools/architecture': {
+      project: ['src/**/*.ts']
+    },
+    'tools/design-system-audits': {
+      project: ['src/**/*.ts']
+    },
+    'tools/expected-failures': {
+      project: ['src/**/*.ts']
+    },
+    'tools/test-recorder': {
+      project: ['src/**/*.ts']
+    },
+    'tools/types-consumer-check': {
+      project: ['src/**/*.ts']
     }
-  }
+  },
+  ignoreBinaries: [
+    // Optional host tool the recorder probes for and degrades without
+    'xcode-select'
+  ],
+  ignore: [
+    // Auto generated API types
+    'packages/ingest-types/src/zod.gen.ts',
+    // Auto generated from core's pinned OpenAPI spec. The operation filter
+    // admits one endpoint, and openapi-ts still emits the request/response
+    // wrappers and a barrel for it; src/index.ts re-exports what is consumed.
+    'packages/comfyui-api-types/src/generated/**',
+    // Devtools extensions, included dynamically
+    'tools/devtools/web/**'
+  ],
+  vite: {
+    config: ['vite?(.*).config.mts']
+  },
+  vitest: {
+    config: ['vitest?(.*).config.ts'],
+    entry: [
+      '**/*.{bench,test,test-d,spec}.?(c|m)[jt]s?(x)',
+      '**/__mocks__/**/*.{js,ts,vue}'
+    ]
+  },
+  playwright: {
+    config: ['playwright?(.*).config.ts'],
+    entry: ['browser_tests/**/*.@(spec|test).?(c|m)[jt]s?(x)']
+  },
+  tags: ['-knipIgnoreUnusedButUsedByCustomNodes', '-knipIgnoreUsedByStackedPR']
 }
 
 export default config

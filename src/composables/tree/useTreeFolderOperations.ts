@@ -1,19 +1,21 @@
-import type { MenuItem } from 'primevue/menuitem'
-import { ref } from 'vue'
+import { shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+import type { MenuItem } from '@comfyorg/design-system/lib/menu/types'
 import type { RenderedTreeExplorerNode } from '@/types/treeExplorerTypes'
 
 /**
  * Use this to handle folder operations in a tree.
  * @param expandNode - The function to expand a node.
  */
-export function useTreeFolderOperations(
-  expandNode: (node: RenderedTreeExplorerNode) => void
+export function useTreeFolderOperations<T>(
+  expandNode: (node: RenderedTreeExplorerNode<T>) => void
 ) {
   const { t } = useI18n()
-  const newFolderNode = ref<RenderedTreeExplorerNode | null>(null)
-  const addFolderTargetNode = ref<RenderedTreeExplorerNode | null>(null)
+  const newFolderNode = shallowRef<RenderedTreeExplorerNode<T> | null>(null)
+  const addFolderTargetNode = shallowRef<RenderedTreeExplorerNode<T> | null>(
+    null
+  )
 
   // Generate a unique temporary key for the new folder
   const generateTempKey = (parentKey: string) => {
@@ -26,7 +28,7 @@ export function useTreeFolderOperations(
 
     try {
       // Call the handleAddFolder method with the new folder name
-      await addFolderTargetNode.value?.handleAddFolder?.(newName)
+      await addFolderTargetNode.value.handleAddFolder?.(newName)
     } finally {
       newFolderNode.value = null
       addFolderTargetNode.value = null
@@ -37,14 +39,14 @@ export function useTreeFolderOperations(
    * The command to add a folder to a node via the context menu
    * @param targetNode - The node where the folder will be added under
    */
-  const addFolderCommand = (targetNode: RenderedTreeExplorerNode) => {
+  const addFolderCommand = (targetNode: RenderedTreeExplorerNode<T>) => {
     expandNode(targetNode)
     newFolderNode.value = {
       key: generateTempKey(targetNode.key),
       label: '',
       leaf: false,
       children: [],
-      icon: 'pi pi-folder',
+      icon: 'icon-[lucide--folder]',
       type: 'folder',
       totalLeaves: 0,
       badgeText: '',
@@ -55,16 +57,15 @@ export function useTreeFolderOperations(
 
   // Generate the "Add Folder" menu item
   const getAddFolderMenuItem = (
-    targetNode: RenderedTreeExplorerNode | null
+    targetNode: RenderedTreeExplorerNode<T> | null
   ): MenuItem => {
     return {
       label: t('g.newFolder'),
-      icon: 'pi pi-folder-plus',
+      icon: 'icon-[lucide--folder-plus]',
       command: () => {
         if (targetNode) addFolderCommand(targetNode)
       },
-      visible: !!targetNode && !targetNode.leaf && !!targetNode.handleAddFolder,
-      isAsync: false
+      visible: !!targetNode && !targetNode.leaf && !!targetNode.handleAddFolder
     }
   }
 

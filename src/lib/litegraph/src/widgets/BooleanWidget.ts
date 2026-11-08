@@ -1,25 +1,21 @@
-import type { IBooleanWidget } from '@/lib/litegraph/src/types/widgets'
+import type { IBooleanWidget } from '@comfyorg/graph-model/widgets'
 
-import {
-  BaseWidget,
-  type DrawWidgetOptions,
-  type WidgetEventOptions
-} from './BaseWidget'
+import { BaseWidget } from './BaseWidget'
+import type { DrawWidgetOptions, WidgetEventOptions } from './BaseWidget'
 
 export class BooleanWidget
   extends BaseWidget<IBooleanWidget>
   implements IBooleanWidget
 {
-  override type = 'toggle' as const
-
   override drawWidget(
     ctx: CanvasRenderingContext2D,
-    { width, showText = true }: DrawWidgetOptions
+    options: DrawWidgetOptions
   ) {
+    const { width, showText = true } = options
     const { height, y } = this
     const { margin } = BaseWidget
 
-    this.drawWidgetShape(ctx, { width, showText })
+    this.drawWidgetShape(ctx, options)
 
     ctx.fillStyle = this.value ? '#89A' : '#333'
     ctx.beginPath()

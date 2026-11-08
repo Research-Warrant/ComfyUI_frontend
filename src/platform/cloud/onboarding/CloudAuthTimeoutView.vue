@@ -1,0 +1,95 @@
+<template>
+  <div class="flex h-full items-center justify-center p-6">
+    <div class="max-w-[100vw] text-center lg:w-[500px]">
+      <h2 class="mb-3 text-xl text-foreground">
+        {{ $t('cloudOnboarding.authTimeout.title') }}
+      </h2>
+      <p class="mb-5 text-muted-foreground">
+        {{ $t('cloudOnboarding.authTimeout.message') }}
+      </p>
+
+      <!-- Troubleshooting Section -->
+      <div class="mb-4 rounded-sm bg-secondary px-3 py-2 text-left text-sm">
+        <h3 class="mb-2 font-semibold text-foreground">
+          {{ $t('cloudOnboarding.authTimeout.troubleshooting') }}
+        </h3>
+        <ul class="space-y-1.5 text-muted-foreground">
+          <li
+            v-for="(cause, index) in $tm('cloudOnboarding.authTimeout.causes')"
+            :key="index"
+            class="flex gap-2"
+          >
+            <span>•</span>
+            <span>{{ cause }}</span>
+          </li>
+        </ul>
+      </div>
+
+      <!-- Technical Details (Collapsible) -->
+      <div v-if="errorMessage" class="mb-4 text-left text-muted-foreground">
+        <Button
+          size="lg"
+          class="w-full justify-between"
+          @click="showTechnicalDetails = !showTechnicalDetails"
+        >
+          <span>{{ $t('cloudOnboarding.authTimeout.technicalDetails') }}</span>
+          <i
+            :class="
+              showTechnicalDetails
+                ? 'icon-[lucide--chevron-up]'
+                : 'icon-[lucide--chevron-down]'
+            "
+          ></i>
+        </Button>
+        <div
+          v-if="showTechnicalDetails"
+          class="mt-2 rounded-sm border border-muted p-4 font-mono text-xs break-all"
+        >
+          {{ errorMessage }}
+        </div>
+      </div>
+
+      <!-- Helpful Links -->
+      <p class="mb-5 text-sm text-gray-600">
+        {{ $t('cloudOnboarding.authTimeout.helpText') }}
+        <a
+          href="https://support.comfy.org"
+          class="cursor-pointer text-blue-400 no-underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          {{ $t('cloudOnboarding.authTimeout.supportLink') }}</a
+        >.
+      </p>
+
+      <div class="flex flex-col gap-3">
+        <Button class="w-full" @click="handleRestart">
+          {{ $t('cloudOnboarding.authTimeout.restart') }}
+        </Button>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
+
+import Button from '@comfyorg/design-system/button/Button'
+import { useAuthActions } from '@/composables/auth/useAuthActions'
+
+interface Props {
+  errorMessage?: string
+}
+
+defineProps<Props>()
+
+const router = useRouter()
+const { logout } = useAuthActions()
+const showTechnicalDetails = ref(false)
+
+const handleRestart = async () => {
+  await logout()
+  await router.replace({ name: 'cloud-login' })
+}
+</script>

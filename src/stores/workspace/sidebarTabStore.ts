@@ -1,17 +1,13 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { useModelLibrarySidebarTab } from '@/composables/sidebarTabs/useModelLibrarySidebarTab'
-import { useNodeLibrarySidebarTab } from '@/composables/sidebarTabs/useNodeLibrarySidebarTab'
-import { useQueueSidebarTab } from '@/composables/sidebarTabs/useQueueSidebarTab'
-import { useWorkflowsSidebarTab } from '@/composables/sidebarTabs/useWorkflowsSidebarTab'
 import { t, te } from '@/i18n'
-import { useCommandStore } from '@/stores/commandStore'
-import { useMenuItemStore } from '@/stores/menuItemStore'
-import { SidebarTabExtension } from '@/types/extensionTypes'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import type { SidebarTabExtension } from '@/types/extensionTypes'
 
 export const useSidebarTabStore = defineStore('sidebarTab', () => {
   const sidebarTabs = ref<SidebarTabExtension[]>([])
+  const sourceExtensionNames = ref<Record<string, string>>({})
   const activeSidebarTabId = ref<string | null>(null)
 
   const activeSidebarTab = computed<SidebarTabExtension | null>(() => {
@@ -25,8 +21,37 @@ export const useSidebarTabStore = defineStore('sidebarTab', () => {
     activeSidebarTabId.value = activeSidebarTabId.value === tabId ? null : tabId
   }
 
-  const registerSidebarTab = (tab: SidebarTabExtension) => {
-    sidebarTabs.value = [...sidebarTabs.value, tab]
+  let registeringExtensionName: string | undefined
+
+  /**
+   * Attributes tabs registered synchronously inside `run` to `extensionName`,
+   * whichever `app` reference the extension registers them through.
+   */
+  const attributeRegistrationsTo = <T>(
+    extensionName: string,
+    run: () => T
+  ): T => {
+    const previous = registeringExtensionName
+    registeringExtensionName = extensionName
+    try {
+      return run()
+    } finally {
+      registeringExtensionName = previous
+    }
+  }
+
+  const registerSidebarTab = (
+    tab: SidebarTabExtension,
+    options?: { prepend?: boolean },
+    sourceExtensionName?: string
+  ) => {
+    const source = sourceExtensionName ?? registeringExtensionName
+    if (source) {
+      sourceExtensionNames.value[tab.id] = source
+    }
+    sidebarTabs.value = options?.prepend
+      ? [tab, ...sidebarTabs.value]
+      : [...sidebarTabs.value, tab]
 
     // Generate label in format "Toggle X Sidebar"
     const labelFunction = () => {
@@ -34,17 +59,18 @@ export const useSidebarTabStore = defineStore('sidebarTab', () => {
       return `Toggle ${tabTitle} Sidebar`
     }
     const tooltipFunction = tab.tooltip
-      ? te(String(tab.tooltip))
+      ? te(tab.tooltip)
         ? () => t(String(tab.tooltip))
-        : String(tab.tooltip)
+        : tab.tooltip
       : undefined
 
     const menubarLabelFunction = () => {
       const menubarLabelKeys: Record<string, string> = {
-        queue: 'menu.queue',
         'node-library': 'sideToolbar.nodeLibrary',
         'model-library': 'sideToolbar.modelLibrary',
-        workflows: 'sideToolbar.workflows'
+        workflows: 'sideToolbar.workflows',
+        assets: 'sideToolbar.assets',
+        'job-history': 'queue.jobHistory'
       }
 
       const key = menubarLabelKeys[tab.id]
@@ -63,7 +89,8 @@ export const useSidebarTabStore = defineStore('sidebarTab', () => {
       tooltip: tooltipFunction,
       versionAdded: '1.3.9',
       category: 'view-controls' as const,
-      function: () => {
+      function: async () => {
+        if (await tab.onToggle?.()) return
         toggleSidebarTab(tab.id)
       },
       active: () => activeSidebarTab.value?.id === tab.id,
@@ -81,45 +108,23 @@ export const useSidebarTabStore = defineStore('sidebarTab', () => {
       const newSidebarTabs = [...sidebarTabs.value]
       newSidebarTabs.splice(index, 1)
       sidebarTabs.value = newSidebarTabs
+      if (activeSidebarTabId.value === id) {
+        activeSidebarTabId.value = null
+      }
+      delete sourceExtensionNames.value[id]
     }
   }
 
-  /**
-   * Register the core sidebar tabs.
-   */
-  const registerCoreSidebarTabs = () => {
-    registerSidebarTab(useQueueSidebarTab())
-    registerSidebarTab(useNodeLibrarySidebarTab())
-    registerSidebarTab(useModelLibrarySidebarTab())
-    registerSidebarTab(useWorkflowsSidebarTab())
-
-    const menuStore = useMenuItemStore()
-
-    menuStore.registerCommands(
-      ['View'],
-      [
-        'Workspace.ToggleBottomPanel',
-        'Comfy.BrowseTemplates',
-        'Workspace.ToggleFocusMode',
-        'Comfy.ToggleCanvasInfo',
-        'Comfy.Canvas.ToggleMinimap',
-        'Comfy.Canvas.ToggleLinkVisibility'
-      ]
-    )
-
-    menuStore.registerCommands(
-      ['View'],
-      ['Comfy.Canvas.ZoomIn', 'Comfy.Canvas.ZoomOut', 'Comfy.Canvas.FitView']
-    )
-  }
+  const getSourceExtensionName = (id: string) => sourceExtensionNames.value[id]
 
   return {
     sidebarTabs,
     activeSidebarTabId,
     activeSidebarTab,
     toggleSidebarTab,
+    attributeRegistrationsTo,
+    getSourceExtensionName,
     registerSidebarTab,
-    unregisterSidebarTab,
-    registerCoreSidebarTabs
+    unregisterSidebarTab
   }
 })

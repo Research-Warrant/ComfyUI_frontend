@@ -1,34 +1,33 @@
 <template>
   <div class="image-upload-wrapper">
-    <div class="flex gap-2 items-center">
+    <div class="flex items-center gap-2">
       <div
-        class="preview-box border rounded p-2 w-16 h-16 flex items-center justify-center"
-        :class="{ 'bg-gray-100 dark:bg-gray-800': !modelValue }"
+        class="preview-box flex size-16 items-center justify-center rounded-sm border p-2"
+        :class="{ 'bg-background': !modelValue }"
       >
         <img
           v-if="modelValue"
           :src="modelValue"
-          class="max-w-full max-h-full object-contain"
+          class="max-h-full max-w-full object-contain"
         />
-        <i v-else class="pi pi-image text-gray-400 text-xl" />
+        <i v-else class="icon-[lucide--image] size-5 text-muted-foreground" />
       </div>
 
       <div class="flex flex-col gap-2">
-        <Button
-          icon="pi pi-upload"
-          :label="$t('g.upload')"
-          size="small"
-          @click="triggerFileInput"
-        />
+        <Button size="sm" @click="triggerFileInput">
+          <i class="icon-[lucide--upload]" />
+          {{ $t('g.upload') }}
+        </Button>
         <Button
           v-if="modelValue"
           class="w-full"
-          outlined
-          icon="pi pi-trash"
-          severity="danger"
-          size="small"
+          variant="destructive"
+          size="sm"
+          :aria-label="$t('g.delete')"
           @click="clearImage"
-        />
+        >
+          <i class="icon-[lucide--trash-2]" />
+        </Button>
       </div>
     </div>
     <input
@@ -42,8 +41,9 @@
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
 import { ref } from 'vue'
+
+import Button from '@comfyorg/design-system/button/Button'
 
 defineProps<{
   modelValue: string

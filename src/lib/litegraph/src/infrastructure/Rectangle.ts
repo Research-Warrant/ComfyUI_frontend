@@ -1,12 +1,10 @@
 import type {
   CompassCorners,
-  Point,
-  ReadOnlyPoint,
+  PointTuple as Point,
   ReadOnlyRect,
-  ReadOnlySize,
   ReadOnlyTypedArray,
-  Size
-} from '@/lib/litegraph/src/interfaces'
+  SizeTuple as Size
+} from '@comfyorg/shared-frontend-utils/geometry'
 import { isInRectangle } from '@/lib/litegraph/src/measure'
 
 /**
@@ -21,8 +19,8 @@ import { isInRectangle } from '@/lib/litegraph/src/measure'
  * - {@link size}: The size of the rectangle.
  */
 export class Rectangle extends Float64Array {
-  #pos: Point | undefined
-  #size: Size | undefined
+  private _pos: Float64Array<ArrayBuffer> | undefined
+  private _size: Float64Array<ArrayBuffer> | undefined
 
   constructor(
     x: number = 0,
@@ -50,7 +48,7 @@ export class Rectangle extends Float64Array {
    * @returns A new rectangle whose centre is at {@link x}
    */
   static fromCentre(
-    [x, y]: ReadOnlyPoint,
+    [x, y]: Readonly<Point>,
     width: number,
     height = width
   ): Rectangle {
@@ -80,11 +78,11 @@ export class Rectangle extends Float64Array {
    * Updating the values of the returned object will update this rectangle.
    */
   get pos(): Point {
-    this.#pos ??= this.subarray(0, 2)
-    return this.#pos!
+    this._pos ??= this.subarray(0, 2)
+    return this._pos as unknown as Point
   }
 
-  set pos(value: ReadOnlyPoint) {
+  set pos(value: Readonly<Point>) {
     this[0] = value[0]
     this[1] = value[1]
   }
@@ -95,11 +93,11 @@ export class Rectangle extends Float64Array {
    * Updating the values of the returned object will update this rectangle.
    */
   get size(): Size {
-    this.#size ??= this.subarray(2, 4)
-    return this.#size!
+    this._size ??= this.subarray(2, 4)
+    return this._size as unknown as Size
   }
 
-  set size(value: ReadOnlySize) {
+  set size(value: Readonly<Size>) {
     this[2] = value[0]
     this[3] = value[1]
   }
@@ -215,7 +213,7 @@ export class Rectangle extends Float64Array {
    * @param point The point to check
    * @returns `true` if {@link point} is inside this rectangle, otherwise `false`.
    */
-  containsPoint([x, y]: ReadOnlyPoint): boolean {
+  containsPoint([x, y]: Readonly<Point>): boolean {
     const [left, top, width, height] = this
     return x >= left && x < left + width && y >= top && y < top + height
   }
@@ -384,12 +382,12 @@ export class Rectangle extends Float64Array {
   }
 
   /** @returns The offset from the top-left of this rectangle to the point [{@link x}, {@link y}], as a new {@link Point}. */
-  getOffsetTo([x, y]: ReadOnlyPoint): Point {
+  getOffsetTo([x, y]: Readonly<Point>): Point {
     return [x - this[0], y - this[1]]
   }
 
   /** @returns The offset from the point [{@link x}, {@link y}] to the top-left of this rectangle, as a new {@link Point}. */
-  getOffsetFrom([x, y]: ReadOnlyPoint): Point {
+  getOffsetFrom([x, y]: Readonly<Point>): Point {
     return [this[0] - x, this[1] - y]
   }
 
@@ -478,6 +476,13 @@ export type ReadOnlyRectangle = Omit<
   | 'resizeBottomLeft'
   | 'resizeTopRight'
   | 'resizeBottomRight'
-  | 'resizeBottomRight'
   | 'updateTo'
 >
+
+type RegisteredRectangle = Rectangle
+
+declare module '@comfyorg/graph-model/entityRegistry' {
+  interface LitegraphEntityRegistry {
+    Rectangle: RegisteredRectangle
+  }
+}

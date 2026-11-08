@@ -1,14 +1,19 @@
+import type { LGraphNode } from '@comfyorg/graph-model/entityRegistry'
 import { clamp } from 'es-toolkit/compat'
 
-import type { LGraphNode } from '@/lib/litegraph/src/LGraphNode'
-import { LiteGraph } from '@/lib/litegraph/src/litegraph'
+import type { IContextMenuValue } from '@/lib/litegraph/src/types/contextMenu'
+
+import { litegraph } from '@/lib/litegraph/src/litegraphInstance'
 import type {
+  ComboWidgetValues,
   IComboWidget,
   IStringComboWidget
-} from '@/lib/litegraph/src/types/widgets'
+} from '@comfyorg/graph-model/widgets'
 import { warnDeprecated } from '@/lib/litegraph/src/utils/feedback'
+import { findComboValueIndex } from '@/lib/litegraph/src/utils/widget'
 
 import { BaseSteppedWidget } from './BaseSteppedWidget'
+import { extensionValue } from './BaseWidget'
 import type { WidgetEventOptions } from './BaseWidget'
 
 /**
@@ -18,25 +23,47 @@ import type { WidgetEventOptions } from './BaseWidget'
  * https://github.com/kijai/ComfyUI-KJNodes/blob/c3dc82108a2a86c17094107ead61d63f8c76200e/web/js/setgetnodes.js#L401-L404
  */
 type Values =
-  | string[]
-  | Record<string, string>
-  | ((widget?: ComboWidget, node?: LGraphNode) => string[])
+  | Exclude<
+      ComboWidgetValues,
+      (widget?: IComboWidget, node?: LGraphNode) => (string | number)[]
+    >
+  | ((widget?: ComboWidget, node?: LGraphNode) => (string | number)[])
 
-function toArray(values: Values): string[] {
+function toArray(values: Values): (string | number)[] {
   return Array.isArray(values) ? values : Object.keys(values)
+}
+
+function toContextMenuValue(
+  value: string | number,
+  label: string
+): string | IContextMenuValue<number> {
+  return typeof value === 'number' ? { content: label, value } : value
 }
 
 export class ComboWidget
   extends BaseSteppedWidget<IStringComboWidget | IComboWidget>
   implements IComboWidget
 {
-  override type = 'combo' as const
-
   override get _displayValue() {
     if (this.computedDisabled) return ''
-    const { values: rawValues } = this.options
+
+    const getOptionLabel = this.options.getOptionLabel
+    if (getOptionLabel) {
+      const stringValue =
+        typeof this.value === 'number' ? String(this.value) : this.value
+      try {
+        return getOptionLabel(stringValue || null)
+      } catch (e) {
+        console.error('Failed to map value:', e)
+        return extensionValue(stringValue) ?? ''
+      }
+    }
+
+    const rawValues = extensionValue(this.options.values)
     if (rawValues) {
-      const values = typeof rawValues === 'function' ? rawValues() : rawValues
+      const values = extensionValue(
+        typeof rawValues === 'function' ? rawValues() : rawValues
+      )
 
       if (values && !Array.isArray(values)) {
         return values[this.value]
@@ -45,9 +72,12 @@ export class ComboWidget
     return typeof this.value === 'number' ? String(this.value) : this.value
   }
 
-  #getValues(node: LGraphNode): Values {
-    const { values } = this.options
-    if (values == null) throw new Error('[ComboWidget]: values is required')
+  private getValues(node: LGraphNode): Values {
+    const values = extensionValue(this.options.values)
+    if (values == null) {
+      console.error('[ComboWidget]: values is required')
+      return []
+    }
 
     return typeof values === 'function' ? values(this, node) : values
   }
@@ -57,7 +87,7 @@ export class ComboWidget
    * @param increment `true` if checking the use of the increment button, `false` for decrement
    * @returns `true` if the value is at the given index, otherwise `false`.
    */
-  #canUseButton(increment: boolean): boolean {
+  private canUseButton(increment: boolean): boolean {
     const { values } = this.options
     // If using legacy duck-typed method, false is the most permissive return value
     if (typeof values === 'function') return false
@@ -65,46 +95,42 @@ export class ComboWidget
     const valuesArray = toArray(values)
     if (!(valuesArray.length > 1)) return false
 
-    // Edge case where the value is both the first and last item in the list
-    const firstValue = valuesArray.at(0)
-    const lastValue = valuesArray.at(-1)
-    if (firstValue === lastValue) return true
-
-    return this.value !== (increment ? lastValue : firstValue)
+    const currentIndex = Array.isArray(values)
+      ? findComboValueIndex(valuesArray, this.value)
+      : valuesArray.indexOf(String(this.value))
+    return currentIndex !== (increment ? valuesArray.length - 1 : 0)
   }
 
   /**
    * Returns `true` if the current value is not the last value in the list.
-   * Handles edge case where the value is both the first and last item in the list.
    */
   override canIncrement(): boolean {
-    return this.#canUseButton(true)
+    return this.canUseButton(true)
   }
 
   override canDecrement(): boolean {
-    return this.#canUseButton(false)
+    return this.canUseButton(false)
   }
 
   override incrementValue(options: WidgetEventOptions): void {
-    this.#tryChangeValue(1, options)
+    this.tryChangeValue(1, options)
   }
 
   override decrementValue(options: WidgetEventOptions): void {
-    this.#tryChangeValue(-1, options)
+    this.tryChangeValue(-1, options)
   }
 
-  #tryChangeValue(delta: number, options: WidgetEventOptions): void {
-    const values = this.#getValues(options.node)
+  private tryChangeValue(delta: number, options: WidgetEventOptions): void {
+    const values = this.getValues(options.node)
     const indexedValues = toArray(values)
 
     // avoids double click event
     options.canvas.last_mouseclick = 0
 
-    const foundIndex =
-      typeof values === 'object'
-        ? indexedValues.indexOf(String(this.value)) + delta
-        : // @ts-expect-error handle non-string values
-          indexedValues.indexOf(this.value) + delta
+    const currentIndex = Array.isArray(values)
+      ? findComboValueIndex(indexedValues, this.value)
+      : indexedValues.indexOf(String(this.value))
+    const foundIndex = currentIndex + delta
 
     const index = clamp(foundIndex, 0, indexedValues.length - 1)
 
@@ -128,16 +154,46 @@ export class ComboWidget
     if (x > width - 40) return this.incrementValue({ e, node, canvas })
 
     // Otherwise, show dropdown menu
-    const values = this.#getValues(node)
+    const values = this.getValues(node)
     const values_list = toArray(values)
 
-    // Handle center click - show dropdown menu
+    // Use addItem to solve duplicate filename issues
+    if (this.options.getOptionLabel) {
+      const menuOptions = {
+        scale: Math.max(1, canvas.ds.scale),
+        event: e,
+        className: 'dark',
+        callback: (value?: string | IContextMenuValue<number>) => {
+          const selectedValue = typeof value === 'string' ? value : value?.value
+          if (selectedValue !== undefined) {
+            this.setValue(selectedValue, { e, node, canvas })
+          }
+        }
+      }
+      const menu = new (litegraph().ContextMenu)<number>([], menuOptions)
+
+      const getOptionLabel = this.options.getOptionLabel
+      for (const value of values_list) {
+        try {
+          const label = getOptionLabel(String(value))
+          menu.addItem(label, toContextMenuValue(value, label), menuOptions)
+        } catch (err) {
+          console.error('Failed to map value:', err)
+          const label = String(value)
+          menu.addItem(label, toContextMenuValue(value, label), menuOptions)
+        }
+      }
+      return
+    }
+
+    // Show dropdown menu when user clicks on widget label
     const text_values = values != values_list ? Object.values(values) : values
-    new LiteGraph.ContextMenu(text_values, {
+    new (litegraph().ContextMenu)(text_values, {
       scale: Math.max(1, canvas.ds.scale),
       event: e,
       className: 'dark',
-      callback: (value: string) => {
+      callback: (value?: string | number | IContextMenuValue) => {
+        if (value === undefined || typeof value === 'object') return
         this.setValue(
           values != values_list ? text_values.indexOf(value) : value,
           { e, node, canvas }
