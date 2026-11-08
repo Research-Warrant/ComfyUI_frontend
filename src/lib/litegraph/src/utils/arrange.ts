@@ -1,5 +1,20 @@
-import type { LGraphNode } from '../LGraphNode'
-import type { Direction, IBoundaryNodes } from '../interfaces'
+import type {
+  Point2D,
+  RectSide as Direction
+} from '@comfyorg/shared-frontend-utils/geometry'
+import type { LGraphNode } from '@comfyorg/graph-model/entityRegistry'
+
+export interface NewNodePosition {
+  node: LGraphNode
+  newPos: Point2D
+}
+
+export interface IBoundaryNodes {
+  top: LGraphNode
+  right: LGraphNode
+  bottom: LGraphNode
+  left: LGraphNode
+}
 
 /**
  * Finds the nodes that are farthest in all four directions, representing the boundary of the nodes.
@@ -8,8 +23,8 @@ import type { Direction, IBoundaryNodes } from '../interfaces'
  * `null` if no nodes were supplied or the first node was falsy.
  */
 export function getBoundaryNodes(nodes: LGraphNode[]): IBoundaryNodes | null {
-  const valid = nodes?.find((x) => x)
-  if (!valid) return null
+  if (nodes.length === 0) return null
+  const valid = nodes[0]
 
   let top = valid
   let right = valid
@@ -17,7 +32,6 @@ export function getBoundaryNodes(nodes: LGraphNode[]): IBoundaryNodes | null {
   let left = valid
 
   for (const node of nodes) {
-    if (!node) continue
     const [x, y] = node.pos
     const [width, height] = node.size
 
@@ -43,9 +57,9 @@ export function getBoundaryNodes(nodes: LGraphNode[]): IBoundaryNodes | null {
 export function distributeNodes(
   nodes: LGraphNode[],
   horizontal?: boolean
-): void {
-  const nodeCount = nodes?.length
-  if (!(nodeCount > 1)) return
+): NewNodePosition[] {
+  const nodeCount = nodes.length
+  if (!(nodeCount > 1)) return []
 
   const index = horizontal ? 0 : 1
 
@@ -68,6 +82,14 @@ export function distributeNodes(
     node.pos[index] = startAt + gap * i
     startAt += node.size[index]
   }
+  const newPositions = sorted.map((node): NewNodePosition => ({
+    node,
+    newPos: {
+      x: node.pos[0],
+      y: node.pos[1]
+    }
+  }))
+  return newPositions
 }
 
 /**
@@ -80,32 +102,53 @@ export function alignNodes(
   nodes: LGraphNode[],
   direction: Direction,
   align_to?: LGraphNode
-): void {
-  if (!nodes) return
-
+): NewNodePosition[] {
   const boundary =
     align_to === undefined
       ? getBoundaryNodes(nodes)
       : { top: align_to, right: align_to, bottom: align_to, left: align_to }
 
-  if (boundary === null) return
+  if (boundary === null) return []
 
-  for (const node of nodes) {
+  const nodePositions = nodes.map((node): NewNodePosition => {
     switch (direction) {
       case 'right':
-        node.pos[0] =
-          boundary.right.pos[0] + boundary.right.size[0] - node.size[0]
-        break
+        return {
+          node,
+          newPos: {
+            x: boundary.right.pos[0] + boundary.right.size[0] - node.size[0],
+            y: node.pos[1]
+          }
+        }
       case 'left':
-        node.pos[0] = boundary.left.pos[0]
-        break
+        return {
+          node,
+          newPos: {
+            x: boundary.left.pos[0],
+            y: node.pos[1]
+          }
+        }
       case 'top':
-        node.pos[1] = boundary.top.pos[1]
-        break
+        return {
+          node,
+          newPos: {
+            x: node.pos[0],
+            y: boundary.top.pos[1]
+          }
+        }
       case 'bottom':
-        node.pos[1] =
-          boundary.bottom.pos[1] + boundary.bottom.size[1] - node.size[1]
-        break
+        return {
+          node,
+          newPos: {
+            x: node.pos[0],
+            y: boundary.bottom.pos[1] + boundary.bottom.size[1] - node.size[1]
+          }
+        }
     }
+  })
+
+  for (const { node, newPos } of nodePositions) {
+    node.setPos(newPos.x, newPos.y)
   }
+  return nodePositions
 }

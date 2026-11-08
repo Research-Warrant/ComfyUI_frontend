@@ -1,35 +1,41 @@
 <template>
-  <SidebarIcon
-    :icon="TemplateIcon"
-    :tooltip="$t('sideToolbar.templates')"
-    :label="$t('sideToolbar.labels.templates')"
-    :is-small="isSmall"
-    class="templates-tab-button"
-    @click="openTemplates"
-  />
+  <div v-coachmark="FIRST_RUN_COACH_IDS.templatesButton" class="flex">
+    <SidebarIcon
+      icon="icon-[comfy--template]"
+      :tooltip="$t('sideToolbar.templates')"
+      :label="$t('sideToolbar.labels.templates')"
+      :is-small="isSmall"
+      class="templates-tab-button"
+      @click="openTemplates"
+    />
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, defineAsyncComponent, markRaw } from 'vue'
+import { computed } from 'vue'
 
-import { useCommandStore } from '@/stores/commandStore'
-import { useSettingStore } from '@/stores/settingStore'
+import { useWorkflowTemplateSelectorDialog } from '@/platform/workflow/templates/composables/useWorkflowTemplateSelectorDialog'
+import { FIRST_RUN_COACH_IDS } from '@/platform/onboarding/onboardingTours'
+import { vCoachmark } from '@/platform/onboarding/vCoachmark'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useTelemetry } from '@comfyorg/telemetry'
 
 import SidebarIcon from './SidebarIcon.vue'
 
-// Import the custom template icon
-const TemplateIcon = markRaw(
-  defineAsyncComponent(() => import('virtual:icons/comfy/template'))
-)
-
 const settingStore = useSettingStore()
-const commandStore = useCommandStore()
 
 const isSmall = computed(
   () => settingStore.get('Comfy.Sidebar.Size') === 'small'
 )
 
+/**
+ * Open templates dialog from sidebar and track UI button click.
+ */
 const openTemplates = () => {
-  void commandStore.execute('Comfy.BrowseTemplates')
+  useTelemetry()?.trackUiButtonClicked({
+    button_id: 'sidebar_templates_dialog_opened',
+    element_group: 'sidebar'
+  })
+  useWorkflowTemplateSelectorDialog().show('sidebar')
 }
 </script>

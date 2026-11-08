@@ -1,6 +1,6 @@
 import type { ISerialisedGraph } from '@/lib/litegraph/src/litegraph'
-import type { SystemStats } from '@/schemas/apiSchema'
-import type { NodeId } from '@/schemas/comfyWorkflowSchema'
+import type { SystemStats } from '@comfyorg/api-client/types'
+import type { SerializedNodeId } from '@comfyorg/graph-model/nodeId'
 
 export interface ErrorReportData {
   exceptionType: string
@@ -10,7 +10,7 @@ export interface ErrorReportData {
   workflow: ISerialisedGraph
 
   traceback?: string
-  nodeId?: NodeId
+  nodeId?: SerializedNodeId
   nodeType?: string
 }
 
@@ -31,9 +31,7 @@ export function generateErrorReport(error: ErrorReportData): string {
 
   return `
 # ComfyUI Error Report
-${
-  error
-    ? `## Error Details
+## Error Details
 - **Node ID:** ${error.nodeId || 'N/A'}
 - **Node Type:** ${error.nodeType || 'N/A'}
 - **Exception Type:** ${error.exceptionType || 'N/A'}
@@ -41,9 +39,7 @@ ${
 ## Stack Trace
 \`\`\`
 ${error.traceback || 'No stack trace available'}
-\`\`\``
-    : ''
-}
+\`\`\`
 ## System Information
 - **ComfyUI Version:** ${systemStats.system.comfyui_version}
 - **Arguments:** ${systemStats.system.argv.join(' ')}
@@ -66,7 +62,7 @@ ${systemStats.devices
   .join('\n')}
 ## Logs
 \`\`\`
-${error.serverLogs}
+${typeof error.serverLogs === 'string' ? error.serverLogs : JSON.stringify(error.serverLogs, null, 2)}
 \`\`\`
 ## Attached Workflow
 Please make sure that workflow does not contain any sensitive information such as API keys or passwords.

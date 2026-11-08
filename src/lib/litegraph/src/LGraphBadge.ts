@@ -1,9 +1,7 @@
-import { LGraphIcon, type LGraphIconOptions } from './LGraphIcon'
-
-export enum BadgePosition {
-  TopLeft = 'top-left',
-  TopRight = 'top-right'
-}
+import type { ReadOnlyRect } from '@comfyorg/shared-frontend-utils/geometry'
+import { LGraphIcon } from './LGraphIcon'
+import type { LGraphIconOptions } from './LGraphIcon'
+import { cachedMeasureText } from './utils/textMeasureCache'
 
 export interface LGraphBadgeOptions {
   text: string
@@ -14,8 +12,11 @@ export interface LGraphBadgeOptions {
   height?: number
   cornerRadius?: number
   iconOptions?: LGraphIconOptions
+  onClick?: (e: MouseEvent) => void
   xOffset?: number
   yOffset?: number
+  /** Centres the text on its cap height instead of the em box. */
+  centerOnCapHeight?: boolean
 }
 
 export class LGraphBadge {
@@ -27,8 +28,15 @@ export class LGraphBadge {
   height: number
   cornerRadius: number
   icon?: LGraphIcon
+  onClick?: (e: MouseEvent) => void
   xOffset: number
   yOffset: number
+  centerOnCapHeight: boolean
+
+  readonly _boundingRect: [number, number, number, number] = [0, 0, 0, 0]
+  get boundingRect(): ReadOnlyRect {
+    return this._boundingRect
+  }
 
   constructor({
     text,
@@ -39,8 +47,10 @@ export class LGraphBadge {
     height = 20,
     cornerRadius = 5,
     iconOptions,
+    onClick,
     xOffset = 0,
-    yOffset = 0
+    yOffset = 0,
+    centerOnCapHeight = false
   }: LGraphBadgeOptions) {
     this.text = text
     this.fgColor = fgColor
@@ -52,12 +62,14 @@ export class LGraphBadge {
     if (iconOptions) {
       this.icon = new LGraphIcon(iconOptions)
     }
+    this.onClick = onClick
     this.xOffset = xOffset
     this.yOffset = yOffset
+    this.centerOnCapHeight = centerOnCapHeight
   }
 
   get visible() {
-    return (this.text?.length ?? 0) > 0 || !!this.icon
+    return this.text.length > 0 || !!this.icon
   }
 
   getWidth(ctx: CanvasRenderingContext2D) {
@@ -65,11 +77,15 @@ export class LGraphBadge {
     const { font } = ctx
     let iconWidth = 0
     if (this.icon) {
-      ctx.font = `${this.icon.fontSize}px '${this.icon.fontFamily}'`
-      iconWidth = ctx.measureText(this.icon.unicode).width + this.padding
+      if (this.icon.image) {
+        iconWidth = this.icon.size + this.padding
+      } else if (this.icon.unicode) {
+        ctx.font = `${this.icon.fontSize}px '${this.icon.fontFamily}'`
+        iconWidth = cachedMeasureText(ctx, this.icon.unicode) + this.padding
+      }
     }
     ctx.font = `${this.fontSize}px sans-serif`
-    const textWidth = this.text ? ctx.measureText(this.text).width : 0
+    const textWidth = this.text ? cachedMeasureText(ctx, this.text) : 0
     ctx.font = font
     return iconWidth + textWidth + this.padding * 2
   }
@@ -86,15 +102,12 @@ export class LGraphBadge {
     const badgeWidth = this.getWidth(ctx)
     const badgeX = 0
 
+    this._boundingRect.splice(0, 4, x, y, badgeWidth, this.height)
+
     // Draw badge background
     ctx.fillStyle = this.bgColor
     ctx.beginPath()
-    if (ctx.roundRect) {
-      ctx.roundRect(x + badgeX, y, badgeWidth, this.height, this.cornerRadius)
-    } else {
-      // Fallback for browsers that don't support roundRect
-      ctx.rect(x + badgeX, y, badgeWidth, this.height)
-    }
+    ctx.roundRect(x + badgeX, y, badgeWidth, this.height, this.cornerRadius)
     ctx.fill()
 
     let drawX = x + badgeX + this.padding
@@ -103,15 +116,24 @@ export class LGraphBadge {
     // Draw icon if present
     if (this.icon) {
       this.icon.draw(ctx, drawX, centerY)
-      drawX += this.icon.fontSize + this.padding / 2 + 4
+      const iconWidth = this.icon.image ? this.icon.size : this.icon.fontSize
+      drawX += iconWidth + this.padding / 2 + 4
     }
 
     // Draw badge text
     if (this.text) {
       ctx.fillStyle = this.fgColor
-      ctx.textBaseline = 'middle'
       ctx.textAlign = 'left'
-      ctx.fillText(this.text, drawX, centerY + 1)
+      ctx.textBaseline = 'alphabetic'
+      const capHeight = this.centerOnCapHeight
+        ? ctx.measureText('H').actualBoundingBoxAscent
+        : Number.NaN
+      if (Number.isFinite(capHeight)) {
+        ctx.fillText(this.text, drawX, centerY + capHeight / 2)
+      } else {
+        ctx.textBaseline = 'middle'
+        ctx.fillText(this.text, drawX, centerY + 1)
+      }
     }
 
     ctx.font = font

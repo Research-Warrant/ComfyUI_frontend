@@ -1,10 +1,11 @@
 import { computedWithControl } from '@vueuse/core'
-import { type ComputedRef, ref } from 'vue'
+import { ref } from 'vue'
+import type { ComputedRef } from 'vue'
 
 import { useChainCallback } from '@/composables/functional/useChainCallback'
 import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
 
-export interface UseComputedWithWidgetWatchOptions {
+interface UseComputedWithWidgetWatchOptions {
   /**
    * Names of widgets to observe for changes.
    * If not provided, all widgets will be observed.
@@ -46,7 +47,7 @@ export const useComputedWithWidgetWatch = (
   const { widgetNames, triggerCanvasRedraw = false } = options
 
   // Create a reactive trigger based on widget values
-  const widgetValues = ref<Record<string, any>>({})
+  const widgetValues = ref<Record<string, unknown>>({})
 
   // Initialize widget observers
   if (node.widgets) {
@@ -55,7 +56,7 @@ export const useComputedWithWidgetWatch = (
       : node.widgets
 
     // Initialize current values
-    const currentValues: Record<string, any> = {}
+    const currentValues: Record<string, unknown> = {}
     widgetsToObserve.forEach((widget) => {
       currentValues[widget.name] = widget.value
     })
@@ -75,6 +76,29 @@ export const useComputedWithWidgetWatch = (
         }
       })
     })
+    if (widgetNames && widgetNames.length > widgetsToObserve.length) {
+      //Inputs have been included
+      const indexesToObserve = widgetNames
+        .map((name) =>
+          widgetsToObserve.some((w) => w.name == name)
+            ? -1
+            : node.inputs.findIndex((i) => i.name == name)
+        )
+        .filter((i) => i >= 0)
+      node.onConnectionsChange = useChainCallback(
+        node.onConnectionsChange,
+        (_type: unknown, index: number, isConnected: boolean) => {
+          if (!indexesToObserve.includes(index)) return
+          widgetValues.value = {
+            ...widgetValues.value,
+            [indexesToObserve[index]]: isConnected
+          }
+          if (triggerCanvasRedraw) {
+            node.graph?.setDirtyCanvas(true, true)
+          }
+        }
+      )
+    }
   }
 
   // Returns a function that creates a computed that responds to widget changes.

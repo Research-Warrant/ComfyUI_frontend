@@ -7,6 +7,8 @@ import {
   writeFileSync
 } from 'fs'
 import { dirname, join } from 'path'
+import type { LocaleData } from './i18n-types'
+import { isNestedLocaleData } from './i18n-types'
 
 // Ensure directories exist
 function ensureDir(dir: string) {
@@ -41,19 +43,19 @@ function getAllJsonFiles(dir: string): string[] {
 }
 
 // Find additions in new object compared to base
-function findAdditions(base: any, updated: any): Record<string, any> {
-  const additions: Record<string, any> = {}
+function findAdditions(base: LocaleData, updated: LocaleData): LocaleData {
+  const additions: LocaleData = {}
 
   for (const key in updated) {
+    const updatedValue = updated[key]
+    const baseValue = base[key]
     if (!(key in base)) {
-      additions[key] = updated[key]
+      additions[key] = updatedValue
     } else if (
-      typeof updated[key] === 'object' &&
-      !Array.isArray(updated[key]) &&
-      typeof base[key] === 'object' &&
-      !Array.isArray(base[key])
+      isNestedLocaleData(updatedValue) &&
+      isNestedLocaleData(baseValue)
     ) {
-      const nestedAdditions = findAdditions(base[key], updated[key])
+      const nestedAdditions = findAdditions(baseValue, updatedValue)
       if (Object.keys(nestedAdditions).length > 0) {
         additions[key] = nestedAdditions
       }
@@ -72,9 +74,9 @@ function capture(srcLocaleDir: string, tempBaseDir: string) {
     const relativePath = file.replace(srcLocaleDir, '')
     const targetPath = join(tempBaseDir, relativePath)
     ensureDir(dirname(targetPath))
-    writeFileSync(targetPath, readFileSync(file))
+    writeFileSync(targetPath, readFileSync(file, 'utf8'))
   }
-  console.log('Captured current locale files to temp/base/')
+  console.warn('Captured current locale files to temp/base/')
 }
 
 // Diff command
@@ -94,7 +96,7 @@ function diff(srcLocaleDir: string, tempBaseDir: string, tempDiffDir: string) {
     if (Object.keys(additions).length > 0) {
       ensureDir(dirname(diffPath))
       writeFileSync(diffPath, JSON.stringify(additions, null, 2))
-      console.log(`Wrote diff to ${diffPath}`)
+      console.warn(`Wrote diff to ${diffPath}`)
     }
   }
 }
@@ -116,9 +118,9 @@ switch (command) {
     // Remove temp directory recursively
     if (existsSync('temp')) {
       rmSync('temp', { recursive: true, force: true })
-      console.log('Removed temp directory')
+      console.warn('Removed temp directory')
     }
     break
   default:
-    console.log('Please specify either "capture" or "diff" command')
+    console.error('Please specify either "capture" or "diff" command')
 }

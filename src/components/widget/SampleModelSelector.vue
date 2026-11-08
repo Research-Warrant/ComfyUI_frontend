@@ -1,0 +1,210 @@
+<template>
+  <BaseModalLayout
+    :labels="modalLayoutLabels"
+    :content-title="$t('assetBrowser.checkpoints')"
+    @close="onClose"
+  >
+    <template #leftPanel>
+      <LeftSidePanel v-model="selectedNavItem" :nav-items="tempNavigation">
+        <template #header-icon>
+          <i class="icon-[lucide--puzzle] text-foreground" />
+        </template>
+        <template #header-title>
+          <span class="text-base text-foreground">{{ $t('g.title') }}</span>
+        </template>
+      </LeftSidePanel>
+    </template>
+
+    <template #header>
+      <SearchInput
+        v-model="searchQuery"
+        :clear-label="$t('g.clear')"
+        :placeholder="$t('g.searchPlaceholder', { subject: '' })"
+        :accessible-label="$t('g.search')"
+        size="lg"
+        class="max-w-96 flex-1"
+      />
+    </template>
+
+    <template #header-right-area>
+      <div class="flex gap-2">
+        <Button variant="primary" @click="() => {}">
+          <i class="icon-[lucide--upload]" />
+          <span>{{ $t('g.upload') }}</span>
+        </Button>
+        <Menu :items="moreMenuItems" align="end">
+          <template #trigger>
+            <Button
+              size="icon"
+              variant="secondary"
+              icon="icon-[lucide--ellipsis]"
+              :aria-label="$t('g.more')"
+            />
+          </template>
+        </Menu>
+      </div>
+    </template>
+
+    <template #contentFilter>
+      <div class="relative flex gap-2 px-6 pb-4">
+        <AppMultiSelect
+          v-model="selectedFrameworks"
+          v-model:search-query="searchText"
+          class="w-[250px]"
+          :label="$t('assetBrowser.selectFrameworks')"
+          :options="frameworkOptions"
+          :show-search-box="true"
+          :show-selected-count="true"
+          :show-clear-button="true"
+        />
+        <AppMultiSelect
+          v-model="selectedProjects"
+          :label="$t('assetBrowser.selectProjects')"
+          :options="projectOptions"
+        />
+        <AppSingleSelect
+          v-model="selectedSort"
+          :label="$t('assetBrowser.sortingType')"
+          :options="sortOptions"
+          class="w-[135px]"
+        >
+          <template #icon>
+            <i class="icon-[lucide--filter]" />
+          </template>
+        </AppSingleSelect>
+      </div>
+    </template>
+
+    <template #content>
+      <!-- Card Examples -->
+      <div :style="gridStyle">
+        <CardContainer v-for="i in 100" :key="i" size="regular">
+          <template #top>
+            <CardTop ratio="landscape">
+              <template #default>
+                <div class="size-full bg-blue-500"></div>
+              </template>
+              <template #top-right>
+                <Button
+                  size="icon"
+                  class="bg-white! text-neutral-900!"
+                  @click="() => {}"
+                >
+                  <i class="icon-[lucide--info]" />
+                </Button>
+              </template>
+              <template #bottom-right>
+                <Tag label="png" shape="overlay" />
+                <Tag label="1.2 MB" shape="overlay" />
+                <Tag label="LoRA" shape="overlay">
+                  <template #icon>
+                    <i class="icon-[lucide--folder]" />
+                  </template>
+                </Tag>
+              </template>
+            </CardTop>
+          </template>
+          <template #bottom>
+            <CardBottom></CardBottom>
+          </template>
+        </CardContainer>
+      </div>
+    </template>
+
+    <template #rightPanel>
+      <div class="size-full bg-card pr-6 pb-8 pl-4"></div>
+    </template>
+  </BaseModalLayout>
+</template>
+
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import CardBottom from '@comfyorg/design-system/content-card/CardBottom'
+import CardContainer from '@comfyorg/design-system/content-card/CardContainer'
+import CardTop from '@comfyorg/design-system/content-card/CardTop'
+import Tag from '@comfyorg/design-system/chip/Tag'
+import Menu from '@comfyorg/design-system/menu/Menu'
+import type { MenuItem } from '@comfyorg/design-system/lib/menu/types'
+import SearchInput from '@comfyorg/design-system/search-input/SearchInput'
+import AppMultiSelect from '@/components/common/AppMultiSelect.vue'
+import AppSingleSelect from '@/components/common/AppSingleSelect.vue'
+import Button from '@comfyorg/design-system/button/Button'
+import BaseModalLayout from '@comfyorg/design-system/layout/BaseModalLayout'
+import LeftSidePanel from '@comfyorg/design-system/navigation/LeftSidePanel'
+import type {
+  NavGroupData,
+  NavItemData
+} from '@comfyorg/design-system/lib/navigation/types'
+import { useModalLayoutLabels } from '@/components/dialog/useModalLayoutLabels'
+import { createGridStyle } from '@/utils/gridUtil'
+
+const frameworkOptions = ref([
+  { name: 'Vue', value: 'vue' },
+  { name: 'React', value: 'react' },
+  { name: 'Angular', value: 'angular' },
+  { name: 'Svelte', value: 'svelte' }
+])
+
+const projectOptions = ref([
+  { name: 'Project A', value: 'proj-a' },
+  { name: 'Project B', value: 'proj-b' },
+  { name: 'Project C', value: 'proj-c' }
+])
+
+const sortOptions = ref([
+  { name: 'Popular', value: 'popular' },
+  { name: 'Latest', value: 'latest' },
+  { name: 'A → Z', value: 'az' }
+])
+
+const tempNavigation = ref<(NavItemData | NavGroupData)[]>([
+  { id: 'installed', label: 'Installed', icon: 'icon-[lucide--download]' },
+  {
+    title: 'TAGS',
+    items: [
+      { id: 'tag-sd15', label: 'SD 1.5', icon: 'icon-[lucide--tag]' },
+      { id: 'tag-sdxl', label: 'SDXL', icon: 'icon-[lucide--tag]' },
+      { id: 'tag-utility', label: 'Utility', icon: 'icon-[lucide--tag]' }
+    ]
+  },
+  {
+    title: 'CATEGORIES',
+    items: [
+      { id: 'cat-models', label: 'Models', icon: 'icon-[lucide--layers]' },
+      { id: 'cat-nodes', label: 'Nodes', icon: 'icon-[lucide--grid-3x3]' }
+    ]
+  }
+])
+
+const { onClose } = defineProps<{
+  onClose: () => void
+}>()
+const { t } = useI18n()
+
+const moreMenuItems: MenuItem[] = [
+  {
+    label: () => t('g.settings'),
+    icon: 'icon-[lucide--download]',
+    command: () => {}
+  },
+  {
+    label: () => t('g.profile'),
+    icon: 'icon-[lucide--scroll]',
+    command: () => {}
+  }
+]
+
+const modalLayoutLabels = useModalLayoutLabels()
+
+const searchQuery = ref<string>('')
+const searchText = ref<string>('')
+const selectedFrameworks = ref([])
+const selectedProjects = ref([])
+const selectedSort = ref<string>('popular')
+
+const selectedNavItem = ref<string | null>('installed')
+
+const gridStyle = computed(() => createGridStyle())
+</script>

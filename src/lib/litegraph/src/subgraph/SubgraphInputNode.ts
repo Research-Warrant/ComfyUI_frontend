@@ -1,25 +1,39 @@
+import type {
+  LGraphNode,
+  LinkConnector,
+  SubgraphInput,
+  SubgraphOutput
+} from '@comfyorg/graph-model/entityRegistry'
 import type { CanvasPointer } from '@/lib/litegraph/src/CanvasPointer'
-import type { LGraphNode, NodeId } from '@/lib/litegraph/src/LGraphNode'
-import { LLink } from '@/lib/litegraph/src/LLink'
-import type { RerouteId } from '@/lib/litegraph/src/Reroute'
-import type { LinkConnector } from '@/lib/litegraph/src/canvas/LinkConnector'
+
+import type { NodeId } from '@comfyorg/graph-model/nodeId'
+import { LLink, slotFloatingLinks } from '@/lib/litegraph/src/LLink'
+import {
+  linkIdReservations,
+  mintLinkId
+} from '@/lib/litegraph/src/idAllocation'
+import type { RerouteId } from '@comfyorg/graph-model/rerouteId'
+
 import { SUBGRAPH_INPUT_ID } from '@/lib/litegraph/src/constants'
 import type {
   DefaultConnectionColors,
-  INodeInputSlot,
-  INodeOutputSlot,
   ISlotType,
   Positionable
-} from '@/lib/litegraph/src/interfaces'
+} from '@comfyorg/graph-model/interfaces'
+import type {
+  INodeInputSlot,
+  INodeOutputSlot
+} from '@comfyorg/graph-model/slots'
 import type { NodeLike } from '@/lib/litegraph/src/types/NodeLike'
-import type { CanvasPointerEvent } from '@/lib/litegraph/src/types/events'
-import { NodeSlotType } from '@/lib/litegraph/src/types/globalEnums'
+import type { CanvasPointerEvent } from '@comfyorg/graph-model/events'
+import { NodeSlotType } from '@comfyorg/graph-model/globalEnums'
 import { findFreeSlotOfType } from '@/lib/litegraph/src/utils/collections'
+import { nextUniqueName } from '@/lib/litegraph/src/strings'
 
 import { EmptySubgraphInput } from './EmptySubgraphInput'
 import { SubgraphIONodeBase } from './SubgraphIONodeBase'
-import type { SubgraphInput } from './SubgraphInput'
-import type { SubgraphOutput } from './SubgraphOutput'
+
+import { provideSubgraphInputGuard } from './subgraphTypeGuards'
 
 export class SubgraphInputNode
   extends SubgraphIONodeBase<SubgraphInput>
@@ -105,8 +119,13 @@ export class SubgraphInputNode
     if (outputIndex === -1 || inputIndex === -1)
       throw new Error('Invalid slot indices.')
 
+    const linkId = mintLinkId(
+      subgraph.state,
+      linkIdReservations(subgraph.rootGraph)
+    )
+
     return new LLink(
-      ++subgraph.state.lastLinkId,
+      linkId,
       input.type || fromSlot.type,
       this.id,
       outputIndex,
@@ -130,9 +149,11 @@ export class SubgraphInputNode
     if (slot === -1) {
       // This indicates a connection is being made from the "Empty" slot.
       // We need to create a new, concrete input on the subgraph that matches the target.
+      const existingNames = this.subgraph.inputs.map((input) => input.name)
+      const uniqueName = nextUniqueName(inputSlot.slot.name, existingNames)
       const newSubgraphInput = this.subgraph.addInput(
-        inputSlot.slot.name,
-        String(inputSlot.slot.type ?? '')
+        uniqueName,
+        String(inputSlot.slot.type)
       )
       const newSlotIndex = this.slots.indexOf(newSubgraphInput)
       if (newSlotIndex === -1) {
@@ -171,24 +192,27 @@ export class SubgraphInputNode
     const { subgraph } = this
 
     // Break floating links
-    if (input._floatingLinks?.size) {
-      for (const link of input._floatingLinks) {
-        subgraph.removeFloatingLink(link)
-      }
+    const inputIndex = node.inputs.indexOf(input)
+    for (const floatingLink of slotFloatingLinks(
+      subgraph,
+      'input',
+      node.id,
+      inputIndex
+    )) {
+      subgraph.removeFloatingLink(floatingLink)
     }
 
-    input.link = null
     subgraph.setDirtyCanvas(false, true)
 
     if (!link) return
 
     const subgraphInputIndex = link.origin_slot
     link.disconnect(subgraph, 'output')
-    subgraph._version++
+    subgraph.incrementVersion()
 
     const subgraphInput = this.slots.at(subgraphInputIndex)
     if (!subgraphInput) {
-      console.debug(
+      console.warn(
         'disconnectNodeInput: subgraphInput not found',
         this,
         subgraphInputIndex
@@ -201,19 +225,28 @@ export class SubgraphInputNode
     if (index !== -1) {
       subgraphInput.linkIds.splice(index, 1)
     } else {
-      console.debug(
+      console.warn(
         'disconnectNodeInput: link ID not found in subgraphInput linkIds',
         link.id
       )
     }
 
-    node.onConnectionsChange?.(
-      NodeSlotType.OUTPUT,
-      index,
-      false,
-      link,
-      subgraphInput
-    )
+    if (subgraphInput.linkIds.length === 0) {
+      subgraphInput._widget = undefined
+    }
+    subgraphInput.events.dispatch('input-disconnected', {
+      input: subgraphInput
+    })
+
+    if (inputIndex !== -1) {
+      node.onConnectionsChange?.(
+        NodeSlotType.INPUT,
+        inputIndex,
+        false,
+        link,
+        subgraphInput
+      )
+    }
   }
 
   override drawProtected(
@@ -263,4 +296,21 @@ export class SubgraphInputNode
 
     this.drawSlots(ctx, colorContext, fromSlot, editorAlpha)
   }
+}
+
+function isSubgraphInput(slot: unknown): slot is SubgraphInput {
+  return (
+    slot != null &&
+    typeof slot === 'object' &&
+    'parent' in slot &&
+    slot.parent instanceof SubgraphInputNode
+  )
+}
+
+provideSubgraphInputGuard(isSubgraphInput)
+
+type RegisteredSubgraphInputNode = SubgraphInputNode
+
+declare module '@comfyorg/graph-model/entityRegistry' {
+  interface SubgraphInputNode extends RegisteredSubgraphInputNode {}
 }

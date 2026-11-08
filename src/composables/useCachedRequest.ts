@@ -4,7 +4,7 @@ import { paramsToCacheKey } from '@/utils/formatUtil'
 
 const DEFAULT_MAX_SIZE = 50
 
-export interface CachedRequestOptions {
+interface CachedRequestOptions {
   /**
    * Maximum number of items to store in the cache
    * @default 50
@@ -47,8 +47,7 @@ export function useCachedRequest<TParams, TResult>(
       cache.set(cacheKey, result)
 
       return result
-    } catch (err) {
-      // Set cache on error to prevent retrying bad requests
+    } catch {
       cache.set(cacheKey, null)
       return null
     } finally {
@@ -74,18 +73,12 @@ export function useCachedRequest<TParams, TResult>(
     }
   }
 
-  /**
-   * Cancel and clear any pending requests
-   */
   const cancel = () => {
     abortAllRequests()
     abortControllers.clear()
     pendingRequests.clear()
   }
 
-  /**
-   * Cached version of the request function
-   */
   const call = async (params: TParams): Promise<TResult | null> => {
     const cacheKey = cacheKeyFn(params)
 
@@ -101,6 +94,9 @@ export function useCachedRequest<TParams, TResult>(
   return {
     call,
     cancel,
-    clear: () => cache.clear()
+    clear: () => cache.clear(),
+    evict: (params: TParams) => {
+      cache.delete(cacheKeyFn(params))
+    }
   }
 }

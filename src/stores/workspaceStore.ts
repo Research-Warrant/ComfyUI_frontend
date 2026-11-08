@@ -1,31 +1,86 @@
+import { useMagicKeys } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import type { Settings } from '@/schemas/apiSchema'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { reportError } from '@comfyorg/telemetry/reportError'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import type { Settings } from '@comfyorg/settings-core/types'
 import { useColorPaletteService } from '@/services/colorPaletteService'
-import { useDialogService } from '@/services/dialogService'
-import type { SidebarTabExtension, ToastManager } from '@/types/extensionTypes'
+import { useExtensionDialogService } from '@/services/dialogService'
+import type {
+  SidebarTabExtension,
+  ToastManager,
+  ToastMessageOptions
+} from '@/types/extensionTypes'
+import { renderMarkdownToHtml } from '@/utils/markdownRendererUtil'
 
 import { useApiKeyAuthStore } from './apiKeyAuthStore'
-import { useCommandStore } from './commandStore'
-import { useFirebaseAuthStore } from './firebaseAuthStore'
-import { useQueueSettingsStore } from './queueStore'
-import { useSettingStore } from './settingStore'
-import { useToastStore } from './toastStore'
-import { useWorkflowStore } from './workflowStore'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import { useExecutionErrorStore } from './executionErrorStore'
+import { useAuthStore } from './authStore'
+import { useQueueSettingsStore } from './queueSettingsStore'
 import { useBottomPanelStore } from './workspace/bottomPanelStore'
 import { useSidebarTabStore } from './workspace/sidebarTabStore'
 
-export const useWorkspaceStore = defineStore('workspace', () => {
+const legacySeverityKinds = new Map<
+  string,
+  'error' | 'info' | 'success' | 'warning'
+>([
+  ['contrast', 'info'],
+  ['error', 'error'],
+  ['info', 'info'],
+  ['secondary', 'info'],
+  ['success', 'success'],
+  ['warn', 'warning'],
+  ['warning', 'warning']
+])
+
+function workspaceStoreSetup() {
   const spinner = ref(false)
-  const shiftDown = ref(false)
+  const { shift: shiftDown } = useMagicKeys()
   /**
    * Whether the workspace is in focus mode.
    * When in focus mode, only the graph editor is visible.
    */
   const focusMode = ref(false)
 
-  const toast = computed<ToastManager>(() => useToastStore())
+  const toastStore = useToast()
+  let reportedWarningSeverity = false
+  function reportWarningSeverity() {
+    if (reportedWarningSeverity) return
+    reportedWarningSeverity = true
+    reportError(new Error('toast.add received severity "warning"'), {
+      surface: 'platform',
+      errorType: 'deprecated_toast_warning_severity',
+      level: 'warning'
+    })
+  }
+  const toast: ToastManager = {
+    add: (message: ToastMessageOptions) => {
+      const severity: string = message.severity ?? 'info'
+      if (severity === 'warning') reportWarningSeverity()
+      const kind = legacySeverityKinds.get(severity)
+      if (!kind) {
+        console.error(`toast.add: unsupported severity "${severity}"`)
+        return
+      }
+      toastStore[kind](message.summary ?? message.detail ?? '', {
+        closable: message.closable,
+        description: message.summary === undefined ? undefined : message.detail,
+        duration: message.life || undefined
+      })
+    },
+    addAlert: (message) => toastStore.warning(message),
+    dismiss: toastStore.dismiss,
+    dismissAll: toastStore.dismissAll,
+    error: toastStore.error,
+    info: toastStore.info,
+    loading: toastStore.loading,
+    success: toastStore.success,
+    warning: toastStore.warning
+  }
   const queueSettings = computed(() => useQueueSettingsStore())
   const command = computed(() => ({
     commands: useCommandStore().commands,
@@ -36,22 +91,26 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     settings: useSettingStore().settingsById,
     // Allow generic key access to settings as custom nodes may add their
     // own settings which is not tracked by the `Setting` schema.
-    get: (key: string) => useSettingStore().get(key as keyof Settings),
+    // oxlint-disable-next-line typescript/no-unnecessary-type-parameters
+    get: <T = unknown>(key: string): T | undefined =>
+      useSettingStore().get(key as keyof Settings) as T | undefined,
     set: (key: string, value: unknown) =>
-      useSettingStore().set(key as keyof Settings, value)
+      useSettingStore().set(
+        key as keyof Settings,
+        value as Settings[keyof Settings]
+      )
   }))
   const workflow = computed(() => useWorkflowStore())
   const colorPalette = useColorPaletteService()
-  const dialog = useDialogService()
+  const dialog = computed(() => useExtensionDialogService())
   const bottomPanel = useBottomPanelStore()
 
-  const authStore = useFirebaseAuthStore()
+  const authStore = useAuthStore()
   const apiKeyStore = useApiKeyAuthStore()
 
-  const firebaseUser = computed(() => authStore.currentUser)
   const isApiKeyLogin = computed(() => apiKeyStore.isAuthenticated)
   const isLoggedIn = computed(
-    () => !!isApiKeyLogin.value || firebaseUser.value !== null
+    () => isApiKeyLogin.value || authStore.isAuthenticated
   )
   const partialUserStore = {
     isLoggedIn
@@ -64,6 +123,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
    */
   function registerSidebarTab(tab: SidebarTabExtension) {
     sidebarTab.value.registerSidebarTab(tab)
+  }
+
+  function registerSidebarTabForExtension(
+    tab: SidebarTabExtension,
+    extensionName: string
+  ) {
+    sidebarTab.value.registerSidebarTab(tab, undefined, extensionName)
   }
 
   /**
@@ -84,6 +150,8 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return sidebarTab.value.sidebarTabs
   }
 
+  const executionErrorStore = useExecutionErrorStore()
+
   return {
     spinner,
     shiftDown,
@@ -102,8 +170,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     bottomPanel,
     user: partialUserStore,
 
+    // Execution error state (read-only, exposed for custom extensions)
+    lastNodeErrors: computed(() => executionErrorStore.lastNodeErrors),
+    lastExecutionError: computed(() => executionErrorStore.lastExecutionError),
+
     registerSidebarTab,
+    registerSidebarTabForExtension,
     unregisterSidebarTab,
-    getSidebarTabs
+    getSidebarTabs,
+    renderMarkdownToHtml
   }
-})
+}
+
+export const useWorkspaceStore = defineStore('workspace', workspaceStoreSetup)

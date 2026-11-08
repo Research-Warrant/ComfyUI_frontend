@@ -1,0 +1,176 @@
+import { isCloud } from '@/platform/distribution/types'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import { useDialogStore } from '@/stores/dialogStore'
+import { isModalOpen } from '@/utils/modalUtil'
+
+import { CORE_KEYBINDINGS } from './defaults'
+import { consultEscapeOverride } from './escapeOverride'
+import { KeyComboImpl } from '@comfyorg/keybindings/keyCombo'
+import { KeybindingImpl } from '@comfyorg/keybindings/keybinding'
+import { useKeybindingStore } from '@comfyorg/keybindings/keybindingStore'
+
+function isExcludedFromDistribution(keybinding: { commandId: string }) {
+  return (
+    isCloud &&
+    keybinding.commandId === 'Workspace.ToggleBottomPanelTab.logs-terminal'
+  )
+}
+
+export function useKeybindingService() {
+  const keybindingStore = useKeybindingStore()
+  const commandStore = useCommandStore()
+  const settingStore = useSettingStore()
+  const dialogStore = useDialogStore()
+
+  function getExecutableKeybinding(keyCombo: KeyComboImpl) {
+    const keybinding = keybindingStore.getKeybinding(keyCombo)
+    return keybinding && commandStore.isRegistered(keybinding.commandId)
+      ? keybinding
+      : undefined
+  }
+
+  function executeCanvasKeybinding(event: KeyboardEvent): boolean {
+    if (event.type !== 'keydown' || event.repeat) return false
+    if (isModalOpen(dialogStore.dialogStack.length)) return false
+
+    const keybinding = getExecutableKeybinding(KeyComboImpl.fromEvent(event))
+    if (keybinding?.targetElementId !== 'graph-canvas-container') return false
+
+    void commandStore.execute(keybinding.commandId)
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    return true
+  }
+
+  async function keybindHandler(event: KeyboardEvent) {
+    const keyCombo = KeyComboImpl.fromEvent(event)
+    if (keyCombo.isModifier) {
+      return
+    }
+
+    const target = event.composedPath()[0] as HTMLElement
+    if (
+      event.key === 'Escape' &&
+      target instanceof Element &&
+      target.closest('[role="menu"], [role="menubar"], [role="dialog"]')
+    ) {
+      return
+    }
+
+    if (
+      keyCombo.isReservedByTextInput &&
+      (target.tagName === 'TEXTAREA' ||
+        target.tagName === 'INPUT' ||
+        target.contentEditable === 'true' ||
+        (target.tagName === 'SPAN' &&
+          target.classList.contains('property_value')))
+    ) {
+      return
+    }
+
+    const keybinding = getExecutableKeybinding(keyCombo)
+    if (keybinding) {
+      const targetElementId =
+        keybinding.targetElementId === 'graph-canvas'
+          ? 'graph-canvas-container'
+          : keybinding.targetElementId
+      if (targetElementId) {
+        const container = document.getElementById(targetElementId)
+        if (!container?.contains(target)) {
+          return
+        }
+      }
+      if (isModalOpen(dialogStore.dialogStack.length)) {
+        if (keyCombo.ctrl) {
+          event.preventDefault()
+        }
+        return
+      }
+
+      if (event.key === 'Escape' && consultEscapeOverride(event)) {
+        if (!event.defaultPrevented) event.preventDefault()
+        return
+      }
+
+      event.preventDefault()
+      if (
+        event.repeat &&
+        keybinding.targetElementId === 'graph-canvas-container'
+      ) {
+        return
+      }
+      const runCommandIds = new Set([
+        'Comfy.QueuePrompt',
+        'Comfy.QueuePromptFront',
+        'Comfy.QueueSelectedOutputNodes'
+      ])
+      if (runCommandIds.has(keybinding.commandId)) {
+        await commandStore.execute(keybinding.commandId, {
+          metadata: {
+            trigger_source: 'keybinding'
+          }
+        })
+      } else {
+        await commandStore.execute(keybinding.commandId)
+      }
+      return
+    }
+
+    if (event.ctrlKey || event.altKey || event.metaKey) {
+      return
+    }
+
+    if (event.key === 'Escape') {
+      const modals = document.querySelectorAll<HTMLElement>('.comfy-modal')
+      for (const modal of modals) {
+        const modalDisplay = window
+          .getComputedStyle(modal)
+          .getPropertyValue('display')
+
+        if (modalDisplay !== 'none') {
+          modal.style.display = 'none'
+          break
+        }
+      }
+
+      for (const d of document.querySelectorAll('dialog')) d.close()
+    }
+  }
+
+  function registerCoreKeybindings() {
+    for (const keybinding of CORE_KEYBINDINGS) {
+      if (isExcludedFromDistribution(keybinding)) continue
+      keybindingStore.addDefaultKeybinding(new KeybindingImpl(keybinding))
+    }
+  }
+
+  function registerUserKeybindings() {
+    const unsetBindings = settingStore.get('Comfy.Keybinding.UnsetBindings')
+    for (const keybinding of unsetBindings) {
+      if (isExcludedFromDistribution(keybinding)) continue
+      keybindingStore.addUserUnsetKeybinding(new KeybindingImpl(keybinding))
+    }
+    const newBindings = settingStore.get('Comfy.Keybinding.NewBindings')
+    for (const keybinding of newBindings) {
+      if (isExcludedFromDistribution(keybinding)) continue
+      keybindingStore.addUserKeybinding(new KeybindingImpl(keybinding))
+    }
+  }
+
+  async function persistUserKeybindings() {
+    await settingStore.setMany({
+      'Comfy.Keybinding.NewBindings': keybindingStore.getUserKeybindingValues(),
+      'Comfy.Keybinding.UnsetBindings':
+        keybindingStore.getUserUnsetKeybindingValues()
+    })
+  }
+
+  return {
+    executeCanvasKeybinding,
+    keybindHandler,
+    registerCoreKeybindings,
+    registerUserKeybindings,
+    persistUserKeybindings
+  }
+}

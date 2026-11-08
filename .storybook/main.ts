@@ -1,45 +1,74 @@
 import type { StorybookConfig } from '@storybook/vue3-vite'
+import vue from '@vitejs/plugin-vue'
 import { FileSystemIconLoader } from 'unplugin-icons/loaders'
 import IconsResolver from 'unplugin-icons/resolver'
 import Icons from 'unplugin-icons/vite'
 import Components from 'unplugin-vue-components/vite'
-import type { InlineConfig } from 'vite'
+import type { Alias, AliasOptions, InlineConfig } from 'vite'
+
+function withoutAppSrcAlias(alias: AliasOptions = []): Alias[] {
+  const entries = Array.isArray(alias)
+    ? alias
+    : Object.entries(alias).map(([find, replacement]) => ({
+        find,
+        replacement
+      }))
+  return entries.filter(({ find }) => find !== '@')
+}
 
 const config: StorybookConfig = {
-  stories: ['../src/**/*.stories.@(js|jsx|mjs|ts|tsx)'],
-  addons: ['@storybook/addon-docs'],
+  stories: [
+    '../src/**/*.stories.@(js|jsx|mjs|ts|tsx)',
+    '../packages/design-system/src/**/*.stories.@(js|jsx|mjs|ts|tsx)',
+    '../packages/account-ui/src/**/*.stories.@(js|jsx|mjs|ts|tsx)'
+  ],
+  staticDirs: ['../public'],
+  addons: ['@storybook/addon-docs', '@storybook/addon-mcp'],
   framework: {
     name: '@storybook/vue3-vite',
     options: {}
   },
   async viteFinal(config) {
-    // Use dynamic import to avoid CJS deprecation warning
     const { mergeConfig } = await import('vite')
-
-    // Filter out any plugins that might generate import maps
+    const { default: tailwindcss } = await import('@tailwindcss/vite')
     if (config.plugins) {
-      config.plugins = config.plugins.filter((plugin: any) => {
-        if (plugin && plugin.name && plugin.name.includes('import-map')) {
-          return false
-        }
-        return true
-      })
+      config.plugins = config.plugins
+        .filter(
+          (plugin): plugin is NonNullable<typeof plugin> & { name: string } => {
+            return (
+              plugin !== null &&
+              plugin !== undefined &&
+              typeof plugin === 'object' &&
+              'name' in plugin &&
+              typeof plugin.name === 'string'
+            )
+          }
+        )
+        .filter(
+          (plugin) =>
+            !plugin.name.includes('import-map') && plugin.name !== 'vite:vue'
+        )
+    }
+
+    config.resolve = {
+      ...config.resolve,
+      alias: withoutAppSrcAlias(config.resolve?.alias)
     }
 
     return mergeConfig(config, {
-      // Replace plugins entirely to avoid inheritance issues
       plugins: [
-        // Only include plugins we explicitly need for Storybook
+        vue({ template: { transformAssetUrls: { includeAbsolute: false } } }),
+        tailwindcss(),
         Icons({
           compiler: 'vue3',
           customCollections: {
             comfy: FileSystemIconLoader(
-              process.cwd() + '/src/assets/icons/custom'
+              process.cwd() + '/packages/design-system/src/icons'
             )
           }
         }),
         Components({
-          dts: false, // Disable dts generation in Storybook
+          dts: false,
           resolvers: [
             IconsResolver({
               customCollections: ['comfy']
@@ -53,35 +82,98 @@ const config: StorybookConfig = {
           deep: true,
           extensions: ['vue']
         })
-        // Note: Explicitly NOT including generateImportMapPlugin to avoid externalization
       ],
       server: {
         allowedHosts: true
       },
       resolve: {
-        alias: {
-          '@': process.cwd() + '/src'
-        }
+        tsconfigPaths: true,
+        alias: [
+          {
+            find: '@comfyorg/design-system/css/style.css',
+            replacement: process.cwd() + '/.storybook/style.css'
+          },
+          {
+            find: '@/composables/queue/useJobList',
+            replacement: process.cwd() + '/src/storybook/mocks/useJobList.ts'
+          },
+          {
+            find: '@/platform/billing/composables/useBillingContext',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/useBillingContext.ts'
+          },
+          {
+            find: '@/platform/billing/composables/useBillingUI',
+            replacement: process.cwd() + '/src/storybook/mocks/useBillingUI.ts'
+          },
+          {
+            find: '@/composables/useFeatureFlags',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/useFeatureFlags.ts'
+          },
+          {
+            find: '@/platform/workspace/composables/useWorkspaceUI',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/useWorkspaceUI.ts'
+          },
+          {
+            find: '@/platform/billing/composables/useBillingCapabilities',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/useBillingCapabilities.ts'
+          },
+          {
+            find: '@/platform/workspace/stores/teamWorkspaceStore',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/teamWorkspaceStore.ts'
+          },
+          {
+            find: '@/composables/auth/useCurrentUser',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/useCurrentUser.ts'
+          },
+          {
+            find: '@/platform/workspace/composables/useWorkspaceUI',
+            replacement:
+              process.cwd() + '/src/storybook/mocks/useWorkspaceUI.ts'
+          },
+          {
+            find: '@/base/credits/comfyCredits',
+            replacement:
+              process.cwd() +
+              '/packages/shared-frontend-utils/src/creditsUtil.ts'
+          },
+          {
+            find: '@/utils/formatUtil',
+            replacement:
+              process.cwd() +
+              '/packages/shared-frontend-utils/src/formatUtil.ts'
+          },
+          {
+            find: '@/utils/networkUtil',
+            replacement:
+              process.cwd() +
+              '/packages/shared-frontend-utils/src/networkUtil.ts'
+          }
+        ]
       },
       build: {
-        rollupOptions: {
-          external: () => {
-            // Don't externalize any modules in Storybook build
-            // This ensures PrimeVue and other dependencies are bundled
-            return false
+        copyPublicDir: false,
+        rolldownOptions: {
+          treeshake: false,
+          output: {
+            keepNames: true,
+            strictExecutionOrder: true
           },
           onwarn: (warning, warn) => {
-            // Suppress specific warnings
             if (
               warning.code === 'UNUSED_EXTERNAL_IMPORT' &&
-              warning.message?.includes('resolveComponent')
+              warning.message.includes('resolveComponent')
             ) {
               return
             }
-            // Suppress Storybook font asset warnings
             if (
               warning.code === 'UNRESOLVED_IMPORT' &&
-              warning.message?.includes('nunito-sans')
+              warning.message.includes('nunito-sans')
             ) {
               return
             }

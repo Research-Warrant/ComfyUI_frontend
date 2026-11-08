@@ -1,82 +1,126 @@
 <template>
-  <section class="prompt-dialog-content flex flex-col gap-6 m-2 mt-4">
-    <span>{{ message }}</span>
-    <ul v-if="itemList?.length" class="pl-4 m-0 flex flex-col gap-2">
-      <li v-for="item of itemList" :key="item">
-        {{ item }}
-      </li>
-    </ul>
-    <Message
-      v-if="hint"
-      icon="pi pi-info-circle"
-      severity="secondary"
-      size="small"
-      variant="simple"
-    >
-      {{ hint }}
-    </Message>
-    <div class="flex gap-4 justify-end">
+  <section
+    class="m-2 mt-4 flex flex-col gap-6 wrap-break-word whitespace-pre-wrap"
+  >
+    <div>
+      <span>{{ message }}</span>
+      <ul v-if="itemList?.length" class="m-0 mt-2 flex flex-col gap-2 pl-4">
+        <li v-for="item of itemList" :key="item">
+          {{ item }}
+        </li>
+      </ul>
+      <div
+        v-if="hint"
+        role="status"
+        class="mt-2 flex items-start gap-2 text-sm text-muted-foreground"
+      >
+        <i class="mt-0.5 icon-[lucide--info]" aria-hidden="true" />
+        <span>{{ hint }}</span>
+      </div>
+    </div>
+    <div class="flex shrink-0 flex-wrap justify-end gap-4">
+      <div v-if="type === 'overwriteBlueprint'" class="flex flex-col gap-1">
+        <div class="flex gap-4">
+          <input
+            id="doNotAskAgain"
+            v-model="doNotAskAgain"
+            type="checkbox"
+            class="size-4 cursor-pointer"
+          />
+          <label for="doNotAskAgain">{{
+            t('missingModelsDialog.doNotAskAgain')
+          }}</label>
+        </div>
+        <i18n-t
+          v-if="doNotAskAgain"
+          keypath="missingModelsDialog.reEnableInSettings"
+          tag="span"
+          class="ml-8 text-sm text-muted-foreground"
+        >
+          <template #link>
+            <Button
+              variant="muted-textonly"
+              class="p-0 text-sm underline hover:bg-transparent"
+              @click="openBlueprintOverwriteSetting"
+            >
+              {{ t('missingModelsDialog.reEnableInSettingsLink') }}
+            </Button>
+          </template>
+        </i18n-t>
+      </div>
+
       <Button
-        :label="$t('g.cancel')"
-        icon="pi pi-undo"
-        severity="secondary"
+        v-if="type !== 'info' && type !== 'dirtyClose'"
+        variant="secondary"
         autofocus
         @click="onCancel"
-      />
+      >
+        <i class="icon-[lucide--undo-2]" />
+        {{ $t('g.cancel') }}
+      </Button>
       <Button
         v-if="type === 'default'"
-        :label="$t('g.confirm')"
-        severity="primary"
-        icon="pi pi-check"
-        @click="onConfirm"
-      />
+        variant="primary"
+        @click="handleConfirm"
+      >
+        <i class="icon-[lucide--check]" />
+        {{ $t('g.confirm') }}
+      </Button>
       <Button
         v-else-if="type === 'delete'"
-        :label="$t('g.delete')"
-        severity="danger"
-        icon="pi pi-trash"
-        @click="onConfirm"
-      />
+        variant="destructive"
+        @click="handleConfirm"
+      >
+        <i class="icon-[lucide--trash-2]" />
+        {{ $t('g.delete') }}
+      </Button>
       <Button
-        v-else-if="type === 'overwrite'"
-        :label="$t('g.overwrite')"
-        severity="warn"
-        icon="pi pi-save"
-        @click="onConfirm"
-      />
+        v-else-if="type === 'overwrite' || type === 'overwriteBlueprint'"
+        variant="destructive"
+        @click="handleConfirm"
+      >
+        <i class="icon-[lucide--save]" />
+        {{ $t('g.overwrite') }}
+      </Button>
       <template v-else-if="type === 'dirtyClose'">
-        <Button
-          :label="$t('g.no')"
-          severity="secondary"
-          icon="pi pi-times"
-          @click="onDeny"
-        />
-        <Button :label="$t('g.save')" icon="pi pi-save" @click="onConfirm" />
+        <Button variant="secondary" @click="onDeny">
+          <i class="icon-[lucide--x]" />
+          {{ denyLabel ?? $t('g.no') }}
+        </Button>
+        <Button autofocus @click="handleConfirm">
+          <i class="icon-[lucide--save]" />
+          {{ confirmLabel ?? $t('g.save') }}
+        </Button>
       </template>
       <Button
         v-else-if="type === 'reinstall'"
-        :label="$t('desktopMenu.reinstall')"
-        severity="warn"
-        icon="pi pi-eraser"
-        @click="onConfirm"
-      />
+        variant="destructive"
+        @click="handleConfirm"
+      >
+        <i class="icon-[lucide--eraser]" />
+        {{ $t('desktopMenu.reinstall') }}
+      </Button>
+      <!-- Info - just show an OK button -->
+      <Button v-else-if="type === 'info'" variant="primary" @click="onCancel">
+        {{ $t('g.ok') }}
+      </Button>
       <!-- Invalid - just show a close button. -->
-      <Button
-        v-else
-        :label="$t('g.close')"
-        severity="primary"
-        icon="pi pi-times"
-        @click="onCancel"
-      />
+      <Button v-else variant="primary" @click="onCancel">
+        <i class="icon-[lucide--x]" />
+        {{ $t('g.close') }}
+      </Button>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import Message from 'primevue/message'
+import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
-import type { ConfirmationDialogType } from '@/services/dialogService'
+import Button from '@comfyorg/design-system/button/Button'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useSettingsDialog } from '@/platform/settings/composables/useSettingsDialog'
+import type { ConfirmationDialogType } from '@/components/dialog/content/confirmationDialogTypes'
 import { useDialogStore } from '@/stores/dialogStore'
 
 const props = defineProps<{
@@ -85,23 +129,30 @@ const props = defineProps<{
   onConfirm: (value?: boolean) => void
   itemList?: string[]
   hint?: string
+  denyLabel?: string
+  confirmLabel?: string
 }>()
 
+const { t } = useI18n()
+
 const onCancel = () => useDialogStore().closeDialog()
+
+function openBlueprintOverwriteSetting() {
+  useDialogStore().closeDialog()
+  useSettingsDialog().show(undefined, 'Comfy.Workflow.WarnBlueprintOverwrite')
+}
+
+const doNotAskAgain = ref(false)
 
 const onDeny = () => {
   props.onConfirm(false)
   useDialogStore().closeDialog()
 }
 
-const onConfirm = () => {
+const handleConfirm = () => {
+  if (props.type === 'overwriteBlueprint' && doNotAskAgain.value)
+    void useSettingStore().set('Comfy.Workflow.WarnBlueprintOverwrite', false)
   props.onConfirm(true)
   useDialogStore().closeDialog()
 }
 </script>
-
-<style lang="css" scoped>
-.prompt-dialog-content {
-  white-space: pre-wrap;
-}
-</style>

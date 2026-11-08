@@ -2,10 +2,8 @@
 import { execSync } from 'child_process'
 import * as fs from 'fs'
 import { globSync } from 'glob'
-
-interface LocaleData {
-  [key: string]: any
-}
+import type { LocaleData } from './i18n-types'
+import { isNestedLocaleData } from './i18n-types'
 
 // Configuration
 const SOURCE_PATTERNS = ['src/**/*.{js,ts,vue}', '!src/locales/**/*']
@@ -18,6 +16,8 @@ const IGNORE_PATTERNS = [
   /^dataTypes\./, // Data types might be referenced dynamically
   /^contextMenu\./, // Context menu items might be dynamic
   /^color\./, // Color names might be used dynamically
+  /^onboardingCoachmarks\.[^.]+\.[^.]+\./, // Step keys derived as onboardingCoachmarks.<tour>.<step>.*
+  /^addCreditsDialog\./,
   // Auto-generated categories from collect-i18n-general.ts
   /^menuLabels\./, // Menu labels generated from command labels
   /^settingsCategories\./, // Settings categories generated from setting definitions
@@ -36,22 +36,20 @@ function getStagedLocaleFiles(): string[] {
     })
     return output
       .split('\n')
-      .filter(
-        (file) => file.startsWith('src/locales/') && file.endsWith('.json')
-      )
+      .filter((file) => /^src\/locales\/[^./][^/]*\/[^/]+\.json$/.test(file))
   } catch {
     return []
   }
 }
 
 // Extract all keys from a nested object
-function extractKeys(obj: any, prefix = ''): string[] {
+function extractKeys(obj: LocaleData, prefix = ''): string[] {
   const keys: string[] = []
 
   for (const [key, value] of Object.entries(obj)) {
     const fullKey = prefix ? `${prefix}.${key}` : key
 
-    if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    if (isNestedLocaleData(value)) {
       keys.push(...extractKeys(value, fullKey))
     } else {
       keys.push(fullKey)
@@ -166,17 +164,17 @@ async function checkNewUnusedKeys() {
 
   // Report results
   if (unusedNewKeys.length > 0) {
-    console.log('\n⚠️  Warning: Found unused NEW i18n keys:\n')
+    console.warn('\n⚠️  Warning: Found unused NEW i18n keys:\n')
 
     for (const key of unusedNewKeys.sort()) {
-      console.log(`  - ${key}`)
+      console.warn(`  - ${key}`)
     }
 
-    console.log(`\n✨ Total unused new keys: ${unusedNewKeys.length}`)
-    console.log(
+    console.warn(`\n✨ Total unused new keys: ${unusedNewKeys.length}`)
+    console.warn(
       '\nThese keys were added but are not used anywhere in the codebase.'
     )
-    console.log('Consider using them or removing them in a future update.')
+    console.warn('Consider using them or removing them in a future update.')
 
     // Changed from process.exit(1) to process.exit(0) for warning only
     process.exit(0)

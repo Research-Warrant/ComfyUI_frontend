@@ -27,7 +27,7 @@
     "label": "桌面版使用指南"
   },
   "Comfy-Desktop_Quit": {
-    "label": "退出"
+    "label": "結束"
   },
   "Comfy-Desktop_Reinstall": {
     "label": "重新安裝"
@@ -36,19 +36,31 @@
     "label": "重新啟動"
   },
   "Comfy_3DViewer_Open3DViewer": {
-    "label": "為選取的節點開啟 3D 檢視器（Beta）"
+    "label": "開啟所選節點的 3D 檢視器（Beta 版）"
+  },
+  "Comfy_BrowseModelAssets": {
+    "label": "實驗性：瀏覽模型資源"
   },
   "Comfy_BrowseTemplates": {
     "label": "瀏覽範本"
   },
-  "Comfy_Canvas_AddEditModelStep": {
-    "label": "新增編輯模型步驟"
+  "Comfy_Canvas_CopySelected": {
+    "label": "複製"
   },
   "Comfy_Canvas_DeleteSelectedItems": {
     "label": "刪除選取項目"
   },
+  "Comfy_Canvas_DeleteSelectedLinks": {
+    "label": "刪除選取的連線"
+  },
   "Comfy_Canvas_FitView": {
     "label": "將視圖適應至所選節點"
+  },
+  "Comfy_Canvas_HideSelectedLinks": {
+    "label": "隱藏選取的連線"
+  },
+  "Comfy_Canvas_Lock": {
+    "label": "鎖定畫布"
   },
   "Comfy_Canvas_MoveSelectedNodes_Down": {
     "label": "將選取的節點下移"
@@ -62,11 +74,23 @@
   "Comfy_Canvas_MoveSelectedNodes_Up": {
     "label": "上移選取的節點"
   },
+  "Comfy_Canvas_PasteFromClipboard": {
+    "label": "貼上"
+  },
+  "Comfy_Canvas_PasteFromClipboardWithConnect": {
+    "label": "貼上並連接"
+  },
   "Comfy_Canvas_ResetView": {
     "label": "重設視圖"
   },
   "Comfy_Canvas_Resize": {
     "label": "調整所選節點大小"
+  },
+  "Comfy_Canvas_SelectAll": {
+    "label": "全選"
+  },
+  "Comfy_Canvas_ShowSelectedLinks": {
+    "label": "顯示選取的連線"
   },
   "Comfy_Canvas_ToggleLinkVisibility": {
     "label": "畫布切換連結可見性"
@@ -83,6 +107,9 @@
   "Comfy_Canvas_ToggleSelectedNodes_Collapse": {
     "label": "收合／展開選取的節點"
   },
+  "Comfy_Canvas_ToggleSelectedNodes_Links": {
+    "label": "隱藏／顯示所選節點上的連線"
+  },
   "Comfy_Canvas_ToggleSelectedNodes_Mute": {
     "label": "停用/啟用選取的節點"
   },
@@ -91,6 +118,9 @@
   },
   "Comfy_Canvas_ToggleSelected_Pin": {
     "label": "釘選/取消釘選已選項目"
+  },
+  "Comfy_Canvas_Unlock": {
+    "label": "解鎖畫布"
   },
   "Comfy_Canvas_ZoomIn": {
     "label": "放大"
@@ -119,11 +149,11 @@
   "Comfy_ExportWorkflowAPI": {
     "label": "匯出工作流程（API 格式）"
   },
-  "Comfy_Feedback": {
-    "label": "提供回饋"
-  },
   "Comfy_Graph_ConvertToSubgraph": {
     "label": "將選取內容轉換為子圖"
+  },
+  "Comfy_Graph_EditSubgraphWidgets": {
+    "label": "編輯子圖表小工具"
   },
   "Comfy_Graph_ExitSubgraph": {
     "label": "離開子圖"
@@ -134,17 +164,11 @@
   "Comfy_Graph_GroupSelectedNodes": {
     "label": "群組所選節點"
   },
+  "Comfy_Graph_ToggleWidgetPromotion": {
+    "label": "切換懸停小工具的提升"
+  },
   "Comfy_Graph_UnpackSubgraph": {
     "label": "解開所選子圖"
-  },
-  "Comfy_GroupNode_ConvertSelectedNodesToGroupNode": {
-    "label": "將選取的節點轉換為群組節點"
-  },
-  "Comfy_GroupNode_ManageGroupNodes": {
-    "label": "管理群組節點"
-  },
-  "Comfy_GroupNode_UngroupSelectedGroupNodes": {
-    "label": "取消群組所選群組節點"
   },
   "Comfy_Help_AboutComfyUI": {
     "label": "開啟關於 ComfyUI"
@@ -164,14 +188,26 @@
   "Comfy_Interrupt": {
     "label": "中斷"
   },
+  "Comfy_LayerEditor_OpenLayerEditor": {
+    "label": "為所選節點開啟圖層編輯器"
+  },
   "Comfy_LoadDefaultWorkflow": {
     "label": "載入預設工作流程"
   },
-  "Comfy_Manager_CustomNodesManager": {
-    "label": "切換自訂節點管理器"
+  "Comfy_Manager_CustomNodesManager_ShowCustomNodesMenu": {
+    "label": "自訂節點管理器"
   },
-  "Comfy_Manager_ToggleManagerProgressDialog": {
-    "label": "切換自訂節點管理器進度條"
+  "Comfy_Manager_CustomNodesManager_ShowLegacyCustomNodesMenu": {
+    "label": "自訂節點（舊版）"
+  },
+  "Comfy_Manager_ShowLegacyManagerMenu": {
+    "label": "管理選單（舊版）"
+  },
+  "Comfy_Manager_ShowMissingPacks": {
+    "label": "安裝缺少的自訂節點"
+  },
+  "Comfy_Manager_ShowUpdateAvailablePacks": {
+    "label": "檢查自訂節點更新"
   },
   "Comfy_MaskEditor_BrushSize_Decrease": {
     "label": "減少 MaskEditor 畫筆大小"
@@ -179,11 +215,35 @@
   "Comfy_MaskEditor_BrushSize_Increase": {
     "label": "增加 MaskEditor 畫筆大小"
   },
+  "Comfy_MaskEditor_ColorPicker": {
+    "label": "在 MaskEditor 中開啟顏色選擇器"
+  },
+  "Comfy_MaskEditor_Mirror_Horizontal": {
+    "label": "在 MaskEditor 中水平鏡像"
+  },
+  "Comfy_MaskEditor_Mirror_Vertical": {
+    "label": "在 MaskEditor 中垂直鏡像"
+  },
   "Comfy_MaskEditor_OpenMaskEditor": {
     "label": "為選取的節點開啟 Mask 編輯器"
   },
+  "Comfy_MaskEditor_Rotate_Left": {
+    "label": "在 MaskEditor 中向左旋轉"
+  },
+  "Comfy_MaskEditor_Rotate_Right": {
+    "label": "在 MaskEditor 中向右旋轉"
+  },
+  "Comfy_Memory_UnloadModels": {
+    "label": "卸載模型"
+  },
+  "Comfy_Memory_UnloadModelsAndExecutionCache": {
+    "label": "卸載模型與執行快取"
+  },
   "Comfy_NewBlankWorkflow": {
     "label": "新增空白工作流程"
+  },
+  "Comfy_Onboarding_Replay": {
+    "label": "重新播放新手導覽"
   },
   "Comfy_OpenClipspace": {
     "label": "Clipspace"
@@ -194,6 +254,9 @@
   "Comfy_OpenWorkflow": {
     "label": "開啟工作流程"
   },
+  "Comfy_PublishSubgraph": {
+    "label": "發布子圖"
+  },
   "Comfy_QueuePrompt": {
     "label": "將提示詞加入佇列"
   },
@@ -203,11 +266,17 @@
   "Comfy_QueueSelectedOutputNodes": {
     "label": "佇列所選的輸出節點"
   },
+  "Comfy_Queue_ToggleOverlay": {
+    "label": "切換任務歷史"
+  },
   "Comfy_Redo": {
     "label": "重做"
   },
   "Comfy_RefreshNodeDefinitions": {
     "label": "重新整理節點定義"
+  },
+  "Comfy_RenameWorkflow": {
+    "label": "重新命名工作流程"
   },
   "Comfy_SaveWorkflow": {
     "label": "儲存工作流程"
@@ -218,11 +287,23 @@
   "Comfy_ShowSettingsDialog": {
     "label": "顯示設定對話框"
   },
+  "Comfy_Subgraph_SetDescription": {
+    "label": "設定子圖描述"
+  },
+  "Comfy_Subgraph_SetSearchAliases": {
+    "label": "設定子圖搜尋別名"
+  },
   "Comfy_ToggleCanvasInfo": {
     "label": "畫布效能"
   },
   "Comfy_ToggleHelpCenter": {
     "label": "說明中心"
+  },
+  "Comfy_ToggleLinear": {
+    "label": "切換應用模式"
+  },
+  "Comfy_ToggleQPOV2": {
+    "label": "切換佇列面板 V2"
   },
   "Comfy_ToggleTheme": {
     "label": "切換主題（深色／淺色）"
@@ -235,6 +316,9 @@
   },
   "Comfy_User_SignOut": {
     "label": "登出"
+  },
+  "Experimental_ToggleVueNodes": {
+    "label": "啟用 Nodes 2.0"
   },
   "Workspace_CloseWorkflow": {
     "label": "關閉當前工作流程"
@@ -269,6 +353,14 @@
   "Workspace_ToggleFocusMode": {
     "label": "切換專注模式"
   },
+  "Workspace_ToggleSidebarTab_apps": {
+    "label": "切換應用程式側邊欄",
+    "tooltip": "應用程式"
+  },
+  "Workspace_ToggleSidebarTab_assets": {
+    "label": "切換資源側邊欄",
+    "tooltip": "資源"
+  },
   "Workspace_ToggleSidebarTab_model-library": {
     "label": "切換模型庫側邊欄",
     "tooltip": "模型庫"
@@ -276,10 +368,6 @@
   "Workspace_ToggleSidebarTab_node-library": {
     "label": "切換節點庫側邊欄",
     "tooltip": "節點庫"
-  },
-  "Workspace_ToggleSidebarTab_queue": {
-    "label": "切換佇列側邊欄",
-    "tooltip": "佇列"
   },
   "Workspace_ToggleSidebarTab_workflows": {
     "label": "切換工作流程側邊欄",

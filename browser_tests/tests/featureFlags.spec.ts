@@ -1,8 +1,18 @@
 import { expect } from '@playwright/test'
 
-import { comfyPageFixture as test } from '../fixtures/ComfyPage'
+import { comfyPageFixture as test } from '@e2e/fixtures/ComfyPage'
 
-test.describe('Feature Flags', () => {
+test.use({ initialSettings: { 'Comfy.UseNewMenu': 'Disabled' } })
+
+test.describe('Feature Flags', { tag: ['@slow', '@settings'] }, () => {
+  test.beforeEach(async ({ comfyPage }) => {
+    await comfyPage.page
+      .context()
+      .route('https://{api,stagingapi}.comfy.org/releases**', (route) =>
+        route.fulfill({ json: [] })
+      )
+  })
+
   test('Client and server exchange feature flags on connection', async ({
     comfyPage
   }) => {
@@ -21,11 +31,11 @@ test.describe('Feature Flags', () => {
       const originalSend = WebSocket.prototype.send
       WebSocket.prototype.send = function (data) {
         try {
-          const parsed = JSON.parse(data)
+          const parsed = JSON.parse(data as string)
           if (parsed.type === 'feature_flags') {
-            window.__capturedMessages.clientFeatureFlags = parsed
+            window.__capturedMessages!.clientFeatureFlags = parsed
           }
-        } catch (e) {
+        } catch {
           // Not JSON, ignore
         }
         return originalSend.call(this, data)
@@ -33,12 +43,9 @@ test.describe('Feature Flags', () => {
 
       // Monitor for server feature flags
       const checkInterval = setInterval(() => {
-        if (
-          window['app']?.api?.serverFeatureFlags &&
-          Object.keys(window['app'].api.serverFeatureFlags).length > 0
-        ) {
-          window.__capturedMessages.serverFeatureFlags =
-            window['app'].api.serverFeatureFlags
+        const flags = window.app?.api.serverFeatureFlags.value
+        if (flags && Object.keys(flags).length > 0) {
+          window.__capturedMessages!.serverFeatureFlags = flags
           clearInterval(checkInterval)
         }
       }, 100)
@@ -53,36 +60,35 @@ test.describe('Feature Flags', () => {
     // Wait for both client and server feature flags
     await newPage.waitForFunction(
       () =>
-        window.__capturedMessages.clientFeatureFlags !== null &&
-        window.__capturedMessages.serverFeatureFlags !== null,
+        window.__capturedMessages!.clientFeatureFlags !== null &&
+        window.__capturedMessages!.serverFeatureFlags !== null,
       { timeout: 10000 }
     )
 
-    // Get the captured messages
-    const messages = await newPage.evaluate(() => window.__capturedMessages)
-
     // Verify client sent feature flags
-    expect(messages.clientFeatureFlags).toBeTruthy()
-    expect(messages.clientFeatureFlags).toHaveProperty('type', 'feature_flags')
-    expect(messages.clientFeatureFlags).toHaveProperty('data')
-    expect(messages.clientFeatureFlags.data).toHaveProperty(
-      'supports_preview_metadata'
-    )
-    expect(
-      typeof messages.clientFeatureFlags.data.supports_preview_metadata
-    ).toBe('boolean')
+    await expect(async () => {
+      const flags = await newPage.evaluate(
+        () => window.__capturedMessages?.clientFeatureFlags
+      )
+      expect(flags).not.toBeNull()
+      expect(flags?.type).toBe('feature_flags')
+      expect(flags?.data).not.toBeNull()
+      expect(flags?.data).toHaveProperty('supports_preview_metadata')
+      expect(typeof flags?.data.supports_preview_metadata).toBe('boolean')
+    }).toPass({ timeout: 5000 })
 
     // Verify server sent feature flags back
-    expect(messages.serverFeatureFlags).toBeTruthy()
-    expect(messages.serverFeatureFlags).toHaveProperty(
-      'supports_preview_metadata'
-    )
-    expect(typeof messages.serverFeatureFlags.supports_preview_metadata).toBe(
-      'boolean'
-    )
-    expect(messages.serverFeatureFlags).toHaveProperty('max_upload_size')
-    expect(typeof messages.serverFeatureFlags.max_upload_size).toBe('number')
-    expect(Object.keys(messages.serverFeatureFlags).length).toBeGreaterThan(0)
+    await expect(async () => {
+      const flags = await newPage.evaluate(
+        () => window.__capturedMessages?.serverFeatureFlags
+      )
+      expect(flags).not.toBeNull()
+      expect(flags).toHaveProperty('supports_preview_metadata')
+      expect(typeof flags?.supports_preview_metadata).toBe('boolean')
+      expect(flags).toHaveProperty('max_upload_size')
+      expect(typeof flags?.max_upload_size).toBe('number')
+      expect(Object.keys(flags ?? {}).length).toBeGreaterThan(0)
+    }).toPass({ timeout: 5000 })
 
     await newPage.close()
   })
@@ -90,51 +96,50 @@ test.describe('Feature Flags', () => {
   test('Server feature flags are received and accessible', async ({
     comfyPage
   }) => {
-    // Wait for connection to establish
-    await comfyPage.page.waitForTimeout(1000)
-
-    // Get the actual server feature flags from the backend
-    const serverFlags = await comfyPage.page.evaluate(() => {
-      return window['app'].api.serverFeatureFlags
-    })
-
     // Verify we received real feature flags from the backend
-    expect(serverFlags).toBeTruthy()
-    expect(Object.keys(serverFlags).length).toBeGreaterThan(0)
-
-    // The backend should send feature flags
-    expect(serverFlags).toHaveProperty('supports_preview_metadata')
-    expect(typeof serverFlags.supports_preview_metadata).toBe('boolean')
-    expect(serverFlags).toHaveProperty('max_upload_size')
-    expect(typeof serverFlags.max_upload_size).toBe('number')
+    await expect(async () => {
+      const flags = await comfyPage.page.evaluate(
+        () => window.app!.api.serverFeatureFlags.value
+      )
+      expect(flags).not.toBeNull()
+      expect(Object.keys(flags).length).toBeGreaterThan(0)
+      // The backend should send feature flags
+      expect(flags).toHaveProperty('supports_preview_metadata')
+      expect(typeof flags.supports_preview_metadata).toBe('boolean')
+      expect(flags).toHaveProperty('max_upload_size')
+      expect(typeof flags.max_upload_size).toBe('number')
+    }).toPass({ timeout: 5000 })
   })
 
   test('serverSupportsFeature method works with real backend flags', async ({
     comfyPage
   }) => {
-    // Wait for connection
-    await comfyPage.page.waitForTimeout(1000)
-
     // Test serverSupportsFeature with real backend flags
-    const supportsPreviewMetadata = await comfyPage.page.evaluate(() => {
-      return window['app'].api.serverSupportsFeature(
-        'supports_preview_metadata'
+    await expect
+      .poll(() =>
+        comfyPage.page.evaluate(
+          () =>
+            typeof window.app!.api.serverSupportsFeature(
+              'supports_preview_metadata'
+            )
+        )
       )
-    })
-    // The method should return a boolean based on the backend's value
-    expect(typeof supportsPreviewMetadata).toBe('boolean')
+      .toBe('boolean')
 
     // Test non-existent feature - should always return false
-    const supportsNonExistent = await comfyPage.page.evaluate(() => {
-      return window['app'].api.serverSupportsFeature('non_existent_feature_xyz')
-    })
-    expect(supportsNonExistent).toBe(false)
+    await expect
+      .poll(() =>
+        comfyPage.page.evaluate(() =>
+          window.app!.api.serverSupportsFeature('non_existent_feature_xyz')
+        )
+      )
+      .toBe(false)
 
     // Test that the method only returns true for boolean true values
     const testResults = await comfyPage.page.evaluate(() => {
       // Temporarily modify serverFeatureFlags to test behavior
-      const original = window['app'].api.serverFeatureFlags
-      window['app'].api.serverFeatureFlags = {
+      const original = window.app!.api.serverFeatureFlags.value
+      window.app!.api.serverFeatureFlags.value = {
         bool_true: true,
         bool_false: false,
         string_value: 'yes',
@@ -143,15 +148,15 @@ test.describe('Feature Flags', () => {
       }
 
       const results = {
-        bool_true: window['app'].api.serverSupportsFeature('bool_true'),
-        bool_false: window['app'].api.serverSupportsFeature('bool_false'),
-        string_value: window['app'].api.serverSupportsFeature('string_value'),
-        number_value: window['app'].api.serverSupportsFeature('number_value'),
-        null_value: window['app'].api.serverSupportsFeature('null_value')
+        bool_true: window.app!.api.serverSupportsFeature('bool_true'),
+        bool_false: window.app!.api.serverSupportsFeature('bool_false'),
+        string_value: window.app!.api.serverSupportsFeature('string_value'),
+        number_value: window.app!.api.serverSupportsFeature('number_value'),
+        null_value: window.app!.api.serverSupportsFeature('null_value')
       }
 
       // Restore original
-      window['app'].api.serverFeatureFlags = original
+      window.app!.api.serverFeatureFlags.value = original
       return results
     })
 
@@ -166,61 +171,65 @@ test.describe('Feature Flags', () => {
   test('getServerFeature method works with real backend data', async ({
     comfyPage
   }) => {
-    // Wait for connection
-    await comfyPage.page.waitForTimeout(1000)
-
     // Test getServerFeature method
-    const previewMetadataValue = await comfyPage.page.evaluate(() => {
-      return window['app'].api.getServerFeature('supports_preview_metadata')
-    })
-    expect(typeof previewMetadataValue).toBe('boolean')
+    await expect
+      .poll(() =>
+        comfyPage.page.evaluate(
+          () =>
+            typeof window.app!.api.getServerFeature('supports_preview_metadata')
+        )
+      )
+      .toBe('boolean')
 
     // Test getting max_upload_size
-    const maxUploadSize = await comfyPage.page.evaluate(() => {
-      return window['app'].api.getServerFeature('max_upload_size')
-    })
-    expect(typeof maxUploadSize).toBe('number')
-    expect(maxUploadSize).toBeGreaterThan(0)
+    await expect(async () => {
+      const maxUpload = await comfyPage.page.evaluate(() =>
+        window.app!.api.getServerFeature('max_upload_size')
+      )
+      expect(typeof maxUpload).toBe('number')
+      expect(maxUpload as number).toBeGreaterThan(0)
+    }).toPass({ timeout: 5000 })
 
     // Test getServerFeature with default value for non-existent feature
-    const defaultValue = await comfyPage.page.evaluate(() => {
-      return window['app'].api.getServerFeature(
-        'non_existent_feature_xyz',
-        'default'
+    await expect
+      .poll(() =>
+        comfyPage.page.evaluate(() =>
+          window.app!.api.getServerFeature(
+            'non_existent_feature_xyz',
+            'default'
+          )
+        )
       )
-    })
-    expect(defaultValue).toBe('default')
+      .toBe('default')
   })
 
   test('getServerFeatures returns all backend feature flags', async ({
     comfyPage
   }) => {
-    // Wait for connection
-    await comfyPage.page.waitForTimeout(1000)
-
     // Test getServerFeatures returns all flags
-    const allFeatures = await comfyPage.page.evaluate(() => {
-      return window['app'].api.getServerFeatures()
-    })
-
-    expect(allFeatures).toBeTruthy()
-    expect(allFeatures).toHaveProperty('supports_preview_metadata')
-    expect(typeof allFeatures.supports_preview_metadata).toBe('boolean')
-    expect(allFeatures).toHaveProperty('max_upload_size')
-    expect(Object.keys(allFeatures).length).toBeGreaterThan(0)
+    await expect(async () => {
+      const features = await comfyPage.page.evaluate(() =>
+        window.app!.api.getServerFeatures()
+      )
+      expect(features).not.toBeNull()
+      expect(features).toHaveProperty('supports_preview_metadata')
+      expect(typeof features.supports_preview_metadata).toBe('boolean')
+      expect(features).toHaveProperty('max_upload_size')
+      expect(Object.keys(features).length).toBeGreaterThan(0)
+    }).toPass({ timeout: 5000 })
   })
 
   test('Client feature flags are immutable', async ({ comfyPage }) => {
     // Test that getClientFeatureFlags returns a copy
     const immutabilityTest = await comfyPage.page.evaluate(() => {
-      const flags1 = window['app'].api.getClientFeatureFlags()
-      const flags2 = window['app'].api.getClientFeatureFlags()
+      const flags1 = window.app!.api.getClientFeatureFlags()
+      const flags2 = window.app!.api.getClientFeatureFlags()
 
       // Modify the first object
       flags1.test_modification = true
 
       // Get flags again to check if original was modified
-      const flags3 = window['app'].api.getClientFeatureFlags()
+      const flags3 = window.app!.api.getClientFeatureFlags()
 
       return {
         areEqual: flags1 === flags2,
@@ -244,19 +253,25 @@ test.describe('Feature Flags', () => {
   test('Server features are immutable when accessed via getServerFeatures', async ({
     comfyPage
   }) => {
-    // Wait for connection to establish
-    await comfyPage.page.waitForTimeout(1000)
-
+    await expect
+      .poll(() =>
+        comfyPage.page.evaluate(
+          () =>
+            window.app!.api.getServerFeatures().supports_preview_metadata !==
+            undefined
+        )
+      )
+      .toBe(true)
     const immutabilityTest = await comfyPage.page.evaluate(() => {
       // Get a copy of server features
-      const features1 = window['app'].api.getServerFeatures()
+      const features1 = window.app!.api.getServerFeatures()
 
       // Try to modify it
       features1.supports_preview_metadata = false
       features1.new_feature = 'added'
 
       // Get another copy
-      const features2 = window['app'].api.getServerFeatures()
+      const features2 = window.app!.api.getServerFeatures()
 
       return {
         modifiedValue: features1.supports_preview_metadata,
@@ -285,7 +300,8 @@ test.describe('Feature Flags', () => {
     // Set up monitoring before navigation
     await newPage.addInitScript(() => {
       // Track when various app components are ready
-      ;(window as any).__appReadiness = {
+
+      window.__appReadiness = {
         featureFlagsReceived: false,
         apiInitialized: false,
         appInitialized: false
@@ -294,26 +310,26 @@ test.describe('Feature Flags', () => {
       // Monitor when feature flags arrive by checking periodically
       const checkFeatureFlags = setInterval(() => {
         if (
-          window['app']?.api?.serverFeatureFlags?.supports_preview_metadata !==
+          window.app?.api.serverFeatureFlags.value.supports_preview_metadata !==
           undefined
         ) {
-          ;(window as any).__appReadiness.featureFlagsReceived = true
+          window.__appReadiness!.featureFlagsReceived = true
           clearInterval(checkFeatureFlags)
         }
       }, 10)
 
       // Monitor API initialization
       const checkApi = setInterval(() => {
-        if (window['app']?.api) {
-          ;(window as any).__appReadiness.apiInitialized = true
+        if (window.app?.api) {
+          window.__appReadiness!.apiInitialized = true
           clearInterval(checkApi)
         }
       }, 10)
 
       // Monitor app initialization
       const checkApp = setInterval(() => {
-        if (window['app']?.graph) {
-          ;(window as any).__appReadiness.appInitialized = true
+        if (window.app?.graph) {
+          window.__appReadiness!.appInitialized = true
           clearInterval(checkApp)
         }
       }, 10)
@@ -332,33 +348,29 @@ test.describe('Feature Flags', () => {
     // Wait for feature flags to be received
     await newPage.waitForFunction(
       () =>
-        window['app']?.api?.serverFeatureFlags?.supports_preview_metadata !==
+        window.app?.api.serverFeatureFlags.value.supports_preview_metadata !==
         undefined,
       {
         timeout: 10000
       }
     )
 
-    // Get readiness state
-    const readiness = await newPage.evaluate(() => {
-      return {
-        ...(window as any).__appReadiness,
-        currentFlags: window['app'].api.serverFeatureFlags
-      }
-    })
-
     // Verify feature flags are available
-    expect(readiness.currentFlags).toHaveProperty('supports_preview_metadata')
-    expect(typeof readiness.currentFlags.supports_preview_metadata).toBe(
-      'boolean'
-    )
-    expect(readiness.currentFlags).toHaveProperty('max_upload_size')
+    await expect(async () => {
+      const flags = await newPage.evaluate(
+        () => window.app!.api.serverFeatureFlags.value
+      )
+      expect(flags).toHaveProperty('supports_preview_metadata')
+      expect(typeof flags.supports_preview_metadata).toBe('boolean')
+      expect(flags).toHaveProperty('max_upload_size')
+    }).toPass({ timeout: 5000 })
 
-    // Verify feature flags were received (we detected them via polling)
-    expect(readiness.featureFlagsReceived).toBe(true)
-
-    // Verify API was initialized (feature flags require API)
-    expect(readiness.apiInitialized).toBe(true)
+    // Verify feature flags were received and API was initialized
+    await expect(async () => {
+      const readiness = await newPage.evaluate(() => window.__appReadiness)
+      expect(readiness?.featureFlagsReceived).toBe(true)
+      expect(readiness?.apiInitialized).toBe(true)
+    }).toPass({ timeout: 5000 })
 
     await newPage.close()
   })

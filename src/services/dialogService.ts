@@ -1,101 +1,159 @@
+import { zPromptErrorResponse } from '@comfyorg/ingest-types/zod'
+import { isPlainObject } from 'es-toolkit'
 import { merge } from 'es-toolkit/compat'
-import { Component } from 'vue'
+import type { Component } from 'vue'
+import type { ComponentAttrs } from 'vue-component-type-helpers'
 
-import ApiNodesSignInContent from '@/components/dialog/content/ApiNodesSignInContent.vue'
+import { assert } from '@/base/assert'
 import ConfirmationDialogContent from '@/components/dialog/content/ConfirmationDialogContent.vue'
 import ErrorDialogContent from '@/components/dialog/content/ErrorDialogContent.vue'
-import IssueReportDialogContent from '@/components/dialog/content/IssueReportDialogContent.vue'
-import LoadWorkflowWarning from '@/components/dialog/content/LoadWorkflowWarning.vue'
-import ManagerProgressDialogContent from '@/components/dialog/content/ManagerProgressDialogContent.vue'
-import MissingModelsWarning from '@/components/dialog/content/MissingModelsWarning.vue'
 import PromptDialogContent from '@/components/dialog/content/PromptDialogContent.vue'
-import SettingDialogContent from '@/components/dialog/content/SettingDialogContent.vue'
-import SignInContent from '@/components/dialog/content/SignInContent.vue'
-import TopUpCreditsDialogContent from '@/components/dialog/content/TopUpCreditsDialogContent.vue'
-import UpdatePasswordContent from '@/components/dialog/content/UpdatePasswordContent.vue'
-import ManagerDialogContent from '@/components/dialog/content/manager/ManagerDialogContent.vue'
-import ManagerHeader from '@/components/dialog/content/manager/ManagerHeader.vue'
-import ManagerProgressFooter from '@/components/dialog/footer/ManagerProgressFooter.vue'
-import ComfyOrgHeader from '@/components/dialog/header/ComfyOrgHeader.vue'
-import ManagerProgressHeader from '@/components/dialog/header/ManagerProgressHeader.vue'
-import SettingDialogHeader from '@/components/dialog/header/SettingDialogHeader.vue'
-import TemplateWorkflowsContent from '@/components/templates/TemplateWorkflowsContent.vue'
-import TemplateWorkflowsDialogHeader from '@/components/templates/TemplateWorkflowsDialogHeader.vue'
 import { t } from '@/i18n'
-import type { ExecutionErrorWsMessage } from '@/schemas/apiSchema'
-import {
-  type DialogComponentProps,
-  type ShowDialogOptions,
-  useDialogStore
+import { isCloud } from '@/platform/distribution/types'
+import type { RunErrorMessageSource } from '@/platform/workflowErrors/errorCatalog/types'
+import type { PromptError } from '@comfyorg/api-client/types'
+import { useTelemetry } from '@comfyorg/telemetry'
+import { PromptExecutionError } from '@comfyorg/api-client/ComfyApi'
+import { useDialogStore } from '@/stores/dialogStore'
+import type {
+  ConfirmOptions,
+  CoreDialogService,
+  ExecutionErrorDialogInput,
+  ExtensionDialogService
+} from '@/services/dialogServiceTypes'
+import type {
+  DialogComponentProps,
+  ShowDialogOptions
 } from '@/stores/dialogStore'
+import { tryExtractValidationError } from '@/utils/executionErrorUtil'
 
-export type ConfirmationDialogType =
-  | 'default'
-  | 'overwrite'
-  | 'delete'
-  | 'dirtyClose'
-  | 'reinstall'
+const GLOBAL_PROMPT_KEY = 'global-prompt'
 
-export const useDialogService = () => {
+function getCatalogPromptError(value: unknown): PromptError | null {
+  if (typeof value === 'string')
+    return { type: 'error', message: value, details: '' }
+  if (!isPlainObject(value)) return null
+
+  const {
+    type = 'error',
+    message = '',
+    details = ''
+  }: Record<string, unknown> = value
+  return typeof type === 'string' &&
+    typeof message === 'string' &&
+    typeof details === 'string'
+    ? { type, message, details }
+    : null
+}
+
+function getPromptErrorSources(response: unknown): RunErrorMessageSource[] {
+  const parsed = zPromptErrorResponse.safeParse(response)
+  if (!parsed.success) return []
+
+  const promptError = getCatalogPromptError(parsed.data.error)
+  const nodeErrors: Record<string, unknown> = isPlainObject(
+    parsed.data.node_errors
+  )
+    ? parsed.data.node_errors
+    : {}
+
+  return [
+    ...(promptError
+      ? [{ kind: 'prompt' as const, error: promptError, isCloud }]
+      : []),
+    ...Object.entries(nodeErrors).flatMap(([nodeId, value]) => {
+      if (!isPlainObject(value)) return []
+      const node: Record<string, unknown> = value
+      const errors: unknown[] = Array.isArray(node.errors) ? node.errors : []
+      return errors.flatMap((value): RunErrorMessageSource[] => {
+        if (!isPlainObject(value)) return []
+        const error = getCatalogPromptError(value)
+        if (!error) return []
+
+        const extraInfo: Record<string, unknown> = isPlainObject(
+          value.extra_info
+        )
+          ? value.extra_info
+          : {}
+        return [
+          {
+            kind: 'node_validation',
+            error: {
+              ...error,
+              extra_info: {
+                ...extraInfo,
+                input_name:
+                  typeof extraInfo.input_name === 'string'
+                    ? extraInfo.input_name
+                    : undefined
+              }
+            },
+            nodeDisplayName:
+              typeof node.class_type === 'string'
+                ? `${node.class_type} (#${nodeId})`
+                : `#${nodeId}`
+          }
+        ]
+      })
+    })
+  ]
+}
+
+function formatDialogError(error: Error): string {
+  try {
+    return error.toString()
+  } catch (cause) {
+    if (!(error instanceof PromptExecutionError)) throw cause
+    return JSON.stringify(error.response)
+  }
+}
+
+// dialogStore.showDialog raises an existing dialog with the same key instead of
+// wiring the new caller's callbacks, so a second concurrent caller on that key
+// would never settle. Serialize FIFO per key; distinct keys stay concurrent.
+const promptTails = new Map<string, Promise<unknown>>()
+
+function enqueuePrompt<T>(
+  key: string,
+  show: (resolve: (value: T) => void) => void
+): Promise<T> {
+  const tail = promptTails.get(key) ?? Promise.resolve()
+  const result = tail.then(() => new Promise<T>(show))
+  const settled = result.then(
+    () => undefined,
+    () => undefined
+  )
+  promptTails.set(key, settled)
+  void settled.then(() => {
+    if (promptTails.get(key) === settled) promptTails.delete(key)
+  })
+  return result
+}
+
+export const useDialogService = (): CoreDialogService => {
   const dialogStore = useDialogStore()
-  function showLoadWorkflowWarning(
-    props: InstanceType<typeof LoadWorkflowWarning>['$props']
-  ) {
-    dialogStore.showDialog({
-      key: 'global-load-workflow-warning',
-      component: LoadWorkflowWarning,
-      props
-    })
-  }
 
-  function showMissingModelsWarning(
-    props: InstanceType<typeof MissingModelsWarning>['$props']
-  ) {
-    dialogStore.showDialog({
-      key: 'global-missing-models-warning',
-      component: MissingModelsWarning,
-      props
-    })
-  }
-
-  function showSettingsDialog(
-    panel?:
-      | 'about'
-      | 'keybinding'
-      | 'extension'
-      | 'server-config'
-      | 'user'
-      | 'credits'
-  ) {
-    const props = panel ? { props: { defaultPanel: panel } } : undefined
-
-    dialogStore.showDialog({
-      key: 'global-settings',
-      headerComponent: SettingDialogHeader,
-      component: SettingDialogContent,
-      ...props
-    })
-  }
-
-  function showAboutDialog() {
-    dialogStore.showDialog({
-      key: 'global-settings',
-      headerComponent: SettingDialogHeader,
-      component: SettingDialogContent,
-      props: {
-        defaultPanel: 'about'
-      }
-    })
-  }
-
-  function showExecutionErrorDialog(executionError: ExecutionErrorWsMessage) {
-    const props: InstanceType<typeof ErrorDialogContent>['$props'] = {
+  function showExecutionErrorDialog(executionError: ExecutionErrorDialogInput) {
+    const validationError = tryExtractValidationError(
+      executionError.exception_message
+    )
+    const validationSources = getPromptErrorSources(validationError)
+    const props: ComponentAttrs<typeof ErrorDialogContent> = {
+      errorSources: validationSources.length
+        ? validationSources
+        : [
+            {
+              kind: 'execution',
+              error: executionError,
+              nodeDisplayName: executionError.node_type ?? ''
+            }
+          ],
       error: {
         exceptionType: executionError.exception_type,
         exceptionMessage: executionError.exception_message,
         nodeId: executionError.node_id?.toString(),
-        nodeType: executionError.node_type,
-        traceback: executionError.traceback.join('\n'),
+        nodeType: executionError.node_type ?? undefined,
+        traceback: executionError.traceback?.join('\n') ?? '',
         reportType: 'graphExecutionError'
       }
     }
@@ -103,83 +161,14 @@ export const useDialogService = () => {
     dialogStore.showDialog({
       key: 'global-execution-error',
       component: ErrorDialogContent,
-      props
-    })
-  }
-
-  function showTemplateWorkflowsDialog(
-    props: InstanceType<typeof TemplateWorkflowsContent>['$props'] = {}
-  ) {
-    dialogStore.showDialog({
-      key: 'global-template-workflows',
-      title: t('templateWorkflows.title'),
-      component: TemplateWorkflowsContent,
-      headerComponent: TemplateWorkflowsDialogHeader,
+      props,
       dialogComponentProps: {
-        pt: {
-          content: { class: '!px-0 overflow-y-hidden' }
-        }
-      },
-      props
-    })
-  }
-
-  function showIssueReportDialog(
-    props: InstanceType<typeof IssueReportDialogContent>['$props']
-  ) {
-    dialogStore.showDialog({
-      key: 'global-issue-report',
-      component: IssueReportDialogContent,
-      props
-    })
-  }
-
-  function showManagerDialog(
-    props: InstanceType<typeof ManagerDialogContent>['$props'] = {}
-  ) {
-    dialogStore.showDialog({
-      key: 'global-manager',
-      component: ManagerDialogContent,
-      headerComponent: ManagerHeader,
-      dialogComponentProps: {
-        closable: true,
-        pt: {
-          pcCloseButton: {
-            root: {
-              class:
-                'bg-gray-500 dark-theme:bg-neutral-700 w-9 h-9 p-1.5 rounded-full text-white'
-            }
-          },
-          header: { class: '!py-0 px-6 !m-0 h-[68px]' },
-          content: {
-            class: '!p-0 h-full w-[90vw] max-w-full flex-1 overflow-hidden'
-          },
-          root: { class: 'manager-dialog' }
-        }
-      },
-      props
-    })
-  }
-
-  function showManagerProgressDialog(options?: {
-    props?: InstanceType<typeof ManagerProgressDialogContent>['$props']
-  }) {
-    return dialogStore.showDialog({
-      key: 'global-manager-progress-dialog',
-      component: ManagerProgressDialogContent,
-      headerComponent: ManagerProgressHeader,
-      footerComponent: ManagerProgressFooter,
-      props: options?.props,
-      priority: 2,
-      dialogComponentProps: {
-        closable: false,
-        modal: false,
-        position: 'bottom',
-        pt: {
-          root: { class: 'w-[80%] max-w-2xl mx-auto border-none' },
-          content: { class: '!p-0' },
-          header: { class: '!p-0 border-none' },
-          footer: { class: '!p-0 border-none' }
+        size: 'lg',
+        onClose: () => {
+          useTelemetry()?.trackUiButtonClicked({
+            button_id: 'error_dialog_closed',
+            element_group: 'error_dialog'
+          })
         }
       }
     })
@@ -196,7 +185,7 @@ export const useDialogService = () => {
       : undefined
 
     return {
-      errorMessage: error.toString(),
+      errorMessage: formatDialogError(error),
       stackTrace: error.stack,
       extensionFile
     }
@@ -225,10 +214,15 @@ export const useDialogService = () => {
             errorMessage: String(error)
           }
 
-    const props: InstanceType<typeof ErrorDialogContent>['$props'] = {
+    const props: ComponentAttrs<typeof ErrorDialogContent> = {
+      errorSources:
+        error instanceof PromptExecutionError
+          ? getPromptErrorSources(error.response)
+          : undefined,
       error: {
         exceptionType: options.title ?? 'Unknown Error',
         exceptionMessage: errorProps.errorMessage,
+        extensionFile: errorProps.extensionFile,
         traceback: errorProps.stackTrace ?? t('errorDialog.noStackTrace'),
         reportType: options.reportType
       }
@@ -237,70 +231,33 @@ export const useDialogService = () => {
     dialogStore.showDialog({
       key: 'global-error',
       component: ErrorDialogContent,
-      props
-    })
-  }
-
-  /**
-   * Shows a dialog requiring sign in for API nodes
-   * @returns Promise that resolves to true if user clicks login, false if cancelled
-   */
-  async function showApiNodesSignInDialog(
-    apiNodeNames: string[]
-  ): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      dialogStore.showDialog({
-        key: 'api-nodes-signin',
-        component: ApiNodesSignInContent,
-        props: {
-          apiNodeNames,
-          onLogin: () => showSignInDialog().then((result) => resolve(result)),
-          onCancel: () => resolve(false)
-        },
-        headerComponent: ComfyOrgHeader,
-        dialogComponentProps: {
-          closable: false,
-          onClose: () => resolve(false)
+      props,
+      dialogComponentProps: {
+        size: 'lg',
+        onClose: () => {
+          useTelemetry()?.trackUiButtonClicked({
+            button_id: 'error_dialog_closed',
+            element_group: 'error_dialog'
+          })
         }
-      })
-    }).then((result) => {
-      dialogStore.closeDialog({ key: 'api-nodes-signin' })
-      return result
-    })
-  }
-
-  async function showSignInDialog(): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
-      dialogStore.showDialog({
-        key: 'global-signin',
-        component: SignInContent,
-        headerComponent: ComfyOrgHeader,
-        props: {
-          onSuccess: () => resolve(true)
-        },
-        dialogComponentProps: {
-          closable: true,
-          onClose: () => resolve(false)
-        }
-      })
-    }).then((result) => {
-      dialogStore.closeDialog({ key: 'global-signin' })
-      return result
+      }
     })
   }
 
   async function prompt({
     title,
     message,
-    defaultValue = ''
+    defaultValue = '',
+    placeholder
   }: {
     title: string
     message: string
     defaultValue?: string
+    placeholder?: string
   }): Promise<string | null> {
-    return new Promise((resolve) => {
+    return enqueuePrompt<string | null>(GLOBAL_PROMPT_KEY, (resolve) => {
       dialogStore.showDialog({
-        key: 'global-prompt',
+        key: GLOBAL_PROMPT_KEY,
         title,
         component: PromptDialogContent,
         props: {
@@ -308,10 +265,12 @@ export const useDialogService = () => {
           defaultValue,
           onConfirm: (value: string) => {
             resolve(value)
-          }
+          },
+          placeholder
         },
         dialogComponentProps: {
-          onClose: () => {
+          size: 'md',
+          onRemoved: () => {
             resolve(null)
           }
         }
@@ -329,21 +288,14 @@ export const useDialogService = () => {
     message,
     type = 'default',
     itemList = [],
-    hint
-  }: {
-    /** Dialog heading */
-    title: string
-    /** The main message body */
-    message: string
-    /** Pre-configured dialog type */
-    type?: ConfirmationDialogType
-    /** Displayed as an unordered list immediately below the message body */
-    itemList?: string[]
-    hint?: string
-  }): Promise<boolean | null> {
-    return new Promise((resolve) => {
+    hint,
+    denyLabel,
+    confirmLabel,
+    key = GLOBAL_PROMPT_KEY
+  }: ConfirmOptions): Promise<boolean | null> {
+    const show = (resolve: (value: boolean | null) => void) => {
       const options: ShowDialogOptions = {
-        key: 'global-prompt',
+        key,
         title,
         component: ConfirmationDialogContent,
         props: {
@@ -351,46 +303,20 @@ export const useDialogService = () => {
           type,
           itemList,
           onConfirm: resolve,
-          hint
+          hint,
+          denyLabel,
+          confirmLabel
         },
         dialogComponentProps: {
-          onClose: () => resolve(null)
+          size: 'md',
+          onRemoved: () => resolve(null)
         }
       }
 
       dialogStore.showDialog(options)
-    })
-  }
+    }
 
-  function showTopUpCreditsDialog(options?: {
-    isInsufficientCredits?: boolean
-  }) {
-    return dialogStore.showDialog({
-      key: 'top-up-credits',
-      component: TopUpCreditsDialogContent,
-      headerComponent: ComfyOrgHeader,
-      props: options,
-      dialogComponentProps: {
-        pt: {
-          header: { class: '!p-3' }
-        }
-      }
-    })
-  }
-
-  /**
-   * Shows a dialog for updating the current user's password.
-   */
-  function showUpdatePasswordDialog() {
-    return dialogStore.showDialog({
-      key: 'global-update-password',
-      component: UpdatePasswordContent,
-      headerComponent: ComfyOrgHeader,
-      props: {
-        onSuccess: () =>
-          dialogStore.closeDialog({ key: 'global-update-password' })
-      }
-    })
+    return enqueuePrompt<boolean | null>(key, show)
   }
 
   /**
@@ -411,47 +337,15 @@ export const useDialogService = () => {
     }
   }
 
-  function toggleManagerDialog(
-    props?: InstanceType<typeof ManagerDialogContent>['$props']
-  ) {
-    if (dialogStore.isDialogOpen('global-manager')) {
-      dialogStore.closeDialog({ key: 'global-manager' })
-    } else {
-      showManagerDialog(props)
-    }
-  }
-
-  function toggleManagerProgressDialog(
-    props?: InstanceType<typeof ManagerProgressDialogContent>['$props']
-  ) {
-    if (dialogStore.isDialogOpen('global-manager-progress-dialog')) {
-      dialogStore.closeDialog({ key: 'global-manager-progress-dialog' })
-    } else {
-      showManagerProgressDialog({ props })
-    }
-  }
-
-  function showLayoutDialog(options: {
+  function showLayoutDialog<C extends Component>(options: {
     key: string
-    component: Component
-    props: { onClose: () => void }
+    component: C
+    props: ComponentAttrs<C>
     dialogComponentProps?: DialogComponentProps
   }) {
     const layoutDefaultProps: DialogComponentProps = {
       headless: true,
-      modal: true,
-      closable: false,
-      pt: {
-        root: {
-          class: 'rounded-2xl overflow-hidden'
-        },
-        header: {
-          class: '!p-0 hidden'
-        },
-        content: {
-          class: '!p-0 !m-0'
-        }
-      }
+      closable: true
     }
 
     return dialogStore.showDialog({
@@ -463,26 +357,52 @@ export const useDialogService = () => {
     })
   }
 
+  function showSmallLayoutDialog(
+    options: Omit<ShowDialogOptions, 'dialogComponentProps'> & {
+      dialogComponentProps?: DialogComponentProps
+    }
+  ) {
+    const { dialogComponentProps: callerProps, ...rest } = options
+
+    return dialogStore.showDialog({
+      ...rest,
+      dialogComponentProps: {
+        closable: true,
+        flush: true,
+        size: 'fit',
+        ...callerProps
+      }
+    })
+  }
+
   return {
-    showLoadWorkflowWarning,
-    showMissingModelsWarning,
-    showSettingsDialog,
-    showAboutDialog,
     showExecutionErrorDialog,
-    showTemplateWorkflowsDialog,
-    showIssueReportDialog,
-    showManagerDialog,
-    showManagerProgressDialog,
     showErrorDialog,
-    showApiNodesSignInDialog,
-    showSignInDialog,
-    showTopUpCreditsDialog,
-    showUpdatePasswordDialog,
-    showExtensionDialog,
     prompt,
     confirm,
-    toggleManagerDialog,
-    toggleManagerProgressDialog,
-    showLayoutDialog
+    showExtensionDialog,
+    showLayoutDialog,
+    showSmallLayoutDialog
   }
+}
+
+export type {
+  ExecutionErrorDialogInput,
+  ExtensionDialogService
+} from '@/services/dialogServiceTypes'
+
+let extensionDialogService: ExtensionDialogService | undefined
+
+export function registerExtensionDialogService(
+  service: ExtensionDialogService
+) {
+  extensionDialogService = service
+}
+
+export function useExtensionDialogService(): ExtensionDialogService {
+  assert(
+    extensionDialogService,
+    'Extension dialog service accessed before registerExtensionDialogService'
+  )
+  return extensionDialogService
 }

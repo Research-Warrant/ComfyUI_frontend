@@ -1,0 +1,78 @@
+<template>
+  <AppDialogPanel
+    body-class="flex flex-1 flex-col gap-4"
+    class="w-xl max-w-full min-w-116"
+    @close="emit('close')"
+  >
+    <template #title>
+      {{ $t('builderToolbar.saveAs') }}
+    </template>
+
+    <div class="flex flex-col gap-2">
+      <DialogDescription as-child>
+        <label :for="inputId">
+          {{ $t('builderToolbar.filename') }}
+        </label>
+      </DialogDescription>
+      <input
+        :id="inputId"
+        v-model="filename"
+        autofocus
+        type="text"
+        class="flex h-10 min-h-8 items-center self-stretch rounded-lg border-none bg-secondary pl-4 text-sm focus-visible:ring-ring"
+        @keydown.enter="
+          filename.trim() && emit('save', filename.trim(), openAsApp)
+        "
+      />
+    </div>
+
+    <div class="flex flex-col gap-2">
+      <label :id="radioGroupLabelId" class="text-sm text-muted-foreground">
+        {{ $t('builderToolbar.defaultViewLabel') }}
+      </label>
+      <ViewTypeRadioGroup
+        v-model="openAsApp"
+        :aria-labelledby="radioGroupLabelId"
+      />
+    </div>
+
+    <template #footer>
+      <Button variant="muted-textonly" size="lg" @click="emit('close')">
+        {{ $t('g.cancel') }}
+      </Button>
+      <Button
+        variant="secondary"
+        size="lg"
+        :disabled="!filename.trim()"
+        @click="emit('save', filename.trim(), openAsApp)"
+      >
+        {{ $t('g.save') }}
+      </Button>
+    </template>
+  </AppDialogPanel>
+</template>
+
+<script setup lang="ts">
+import { ref, useId } from 'vue'
+
+import Button from '@comfyorg/design-system/button/Button'
+import DialogDescription from '@comfyorg/design-system/dialog/DialogDescription'
+import AppDialogPanel from '@/components/dialog/AppDialogPanel.vue'
+
+import ViewTypeRadioGroup from './ViewTypeRadioGroup.vue'
+
+const { defaultFilename, defaultOpenAsApp = true } = defineProps<{
+  defaultFilename: string
+  defaultOpenAsApp?: boolean
+}>()
+
+const emit = defineEmits<{
+  save: [filename: string, openAsApp: boolean]
+  close: []
+}>()
+
+const inputId = useId()
+const radioGroupLabelId = useId()
+const filename = ref(defaultFilename)
+const openAsApp = ref(defaultOpenAsApp)
+</script>

@@ -1,15 +1,9 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 
-import { useShortcutsTab } from '@/composables/bottomPanelTabs/useShortcutsTab'
-import {
-  useCommandTerminalTab,
-  useLogsTerminalTab
-} from '@/composables/bottomPanelTabs/useTerminalTabs'
-import { useCommandStore } from '@/stores/commandStore'
-import { ComfyExtension } from '@/types/comfy'
+import { useCommandStore } from '@/platform/keybindings/commandStore'
+import type { ComfyExtension } from '@/types/comfy'
 import type { BottomPanelExtension } from '@/types/extensionTypes'
-import { isElectron } from '@/utils/envUtil'
 
 type PanelType = 'terminal' | 'shortcuts'
 
@@ -75,8 +69,18 @@ export const useBottomPanelStore = defineStore('bottomPanel', () => {
   }
 
   const toggleBottomPanel = () => {
-    // Legacy method - toggles terminal panel
-    togglePanel('terminal')
+    // Toggles the terminal panel if available, otherwise falls back to shortcuts
+    // Terminal tabs are loaded asynchronously, so may not be available immediately
+    const terminalPanel = panels.value.terminal
+    if (terminalPanel.tabs.length > 0) {
+      togglePanel('terminal')
+    } else {
+      // Terminal tabs not loaded yet - fall back to shortcuts panel
+      // If no panel is open, open shortcuts
+      // If shortcuts is already open, close it
+      // If another panel is open (shouldn't happen), switch to shortcuts
+      togglePanel('shortcuts')
+    }
   }
 
   const setActiveTab = (tabId: string) => {
@@ -113,20 +117,12 @@ export const useBottomPanelStore = defineStore('bottomPanel', () => {
     const tabName = tab.title || tab.titleKey || tab.id
     useCommandStore().registerCommand({
       id: `Workspace.ToggleBottomPanelTab.${tab.id}`,
-      icon: 'pi pi-list',
+      icon: 'icon-[lucide--list]',
       label: `Toggle ${tabName} Bottom Panel`,
       category: 'view-controls' as const,
       function: () => toggleBottomPanelTab(tab.id),
       source: 'System'
     })
-  }
-
-  const registerCoreBottomPanelTabs = () => {
-    registerBottomPanelTab(useLogsTerminalTab())
-    if (isElectron()) {
-      registerBottomPanelTab(useCommandTerminalTab())
-    }
-    useShortcutsTab().forEach(registerBottomPanelTab)
   }
 
   const registerExtensionBottomPanelTabs = (extension: ComfyExtension) => {
@@ -149,7 +145,6 @@ export const useBottomPanelStore = defineStore('bottomPanel', () => {
     setActiveTab,
     toggleBottomPanelTab,
     registerBottomPanelTab,
-    registerCoreBottomPanelTabs,
     registerExtensionBottomPanelTabs
   }
 })

@@ -1,27 +1,40 @@
-import type { LGraphNode } from '@/lib/litegraph/src/LGraphNode'
+import type {
+  LGraphNode,
+  SubgraphInput,
+  SubgraphOutput
+} from '@comfyorg/graph-model/entityRegistry'
+import { shallowReactive } from 'vue'
+
+import { MAX_MULTITYPE_SLICES } from '@/constants/slotColors'
+
 import { LabelPosition, SlotShape, SlotType } from '@/lib/litegraph/src/draw'
 import type {
   CanvasColour,
   DefaultConnectionColors,
+  INodeSlot,
+  OptionalProps
+} from '@comfyorg/graph-model/interfaces'
+import type { PointTuple as Point } from '@comfyorg/shared-frontend-utils/geometry'
+import type {
   INodeInputSlot,
   INodeOutputSlot,
-  INodeSlot,
-  ISubgraphInput,
-  OptionalProps,
-  Point,
-  ReadOnlyPoint
-} from '@/lib/litegraph/src/interfaces'
-import { LiteGraph, Rectangle } from '@/lib/litegraph/src/litegraph'
+  ISubgraphInput
+} from '@comfyorg/graph-model/slots'
+import { LiteGraph } from '@/lib/litegraph/src/litegraphInstance'
+import { Rectangle } from '@/lib/litegraph/src/infrastructure/Rectangle'
 import { getCentre } from '@/lib/litegraph/src/measure'
-import type { SubgraphInput } from '@/lib/litegraph/src/subgraph/SubgraphInput'
-import type { SubgraphOutput } from '@/lib/litegraph/src/subgraph/SubgraphOutput'
-import {
-  LinkDirection,
-  RenderShape
-} from '@/lib/litegraph/src/types/globalEnums'
 
-import { NodeInputSlot } from './NodeInputSlot'
+import { LinkDirection, RenderShape } from '@comfyorg/graph-model/globalEnums'
+
 import { SlotBase } from './SlotBase'
+
+let isNodeInputSlot: (slot: NodeSlot) => boolean
+
+export function provideNodeInputSlotGuard(
+  guard: (slot: NodeSlot) => boolean
+): void {
+  isNodeInputSlot = guard
+}
 
 export interface IDrawOptions {
   colorContext: DefaultConnectionColors
@@ -31,12 +44,14 @@ export interface IDrawOptions {
   highlight?: boolean
 }
 
+const ROTATION_OFFSET = -Math.PI
+
 /** Shared base class for {@link LGraphNode} input and output slots. */
 export abstract class NodeSlot extends SlotBase implements INodeSlot {
   pos?: Point
 
   /** The offset from the parent node to the centre point of this slot. */
-  get #centreOffset(): ReadOnlyPoint {
+  private get _centreOffset(): Readonly<Point> {
     const nodePos = this.node.pos
     const { boundingRect } = this
 
@@ -52,35 +67,28 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
   }
 
   /** The center point of this slot when the node is collapsed. */
-  abstract get collapsedPos(): ReadOnlyPoint
+  abstract get collapsedPos(): Readonly<Point>
 
-  #node: LGraphNode
+  protected _node: LGraphNode
   get node(): LGraphNode {
-    return this.#node
+    return this._node
   }
 
   get highlightColor(): CanvasColour {
-    return (
-      LiteGraph.NODE_TEXT_HIGHLIGHT_COLOR ??
-      LiteGraph.NODE_SELECTED_TITLE_COLOR ??
-      LiteGraph.NODE_TEXT_COLOR
-    )
+    return LiteGraph.NODE_TEXT_HIGHLIGHT_COLOR
   }
 
   abstract get isWidgetInputSlot(): boolean
 
   constructor(
-    slot: OptionalProps<INodeSlot, 'boundingRect'>,
+    slot:
+      | OptionalProps<INodeSlot, 'boundingRect'>
+      | OptionalProps<ISubgraphInput, 'link' | 'boundingRect'>,
     node: LGraphNode
   ) {
-    // Workaround: Ensure internal properties are not copied to the slot (_listenerController
     // https://github.com/Comfy-Org/litegraph.js/issues/1138
-    const maybeSubgraphSlot: OptionalProps<
-      ISubgraphInput,
-      'link' | 'boundingRect'
-    > = slot
-    const { boundingRect, name, type, _listenerController, ...rest } =
-      maybeSubgraphSlot
+    const { boundingRect, name, type, ...rest } = slot
+    if ('_listenerController' in rest) delete rest._listenerController
     const rectangle = boundingRect
       ? Rectangle.ensureRect(boundingRect)
       : new Rectangle()
@@ -88,7 +96,10 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
     super(name, type, rectangle)
 
     Object.assign(this, rest)
-    this.#node = node
+    this._node = node
+
+    // Return the proxy so in-place field writes (rename, retype) reach Vue.
+    return shallowReactive(this)
   }
 
   /**
@@ -125,12 +136,13 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
       ? this.highlightColor
       : LiteGraph.NODE_TEXT_COLOR
 
-    const pos = this.#centreOffset
+    const pos = this._centreOffset
     const slot_type = this.type
     const slot_shape = (
       slot_type === SlotType.Array ? SlotShape.Grid : this.shape
     ) as SlotShape
 
+    ctx.save()
     ctx.beginPath()
     let doFill = true
 
@@ -164,16 +176,51 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
       if (lowQuality) {
         ctx.rect(pos[0] - 4, pos[1] - 4, 8, 8)
       } else {
-        let radius: number
         if (slot_shape === SlotShape.HollowCircle) {
+          const path = new Path2D()
+          path.arc(pos[0], pos[1], 10, 0, Math.PI * 2)
+          path.arc(pos[0], pos[1], highlight ? 2.5 : 1.5, 0, Math.PI * 2)
+          ctx.clip(path, 'evenodd')
+        }
+
+        const radius = highlight ? 5 : 4
+        const colorMapper = this.isConnected
+          ? colorContext.getConnectedColor
+          : colorContext.getDisconnectedColor
+        const types = `${this.type}`
+          .split(',')
+          .map(colorMapper)
+          .slice(0, MAX_MULTITYPE_SLICES)
+
+        if (types.length > 1) {
           doFill = false
-          doStroke = true
-          ctx.lineWidth = 3
-          ctx.strokeStyle = ctx.fillStyle
-          radius = highlight ? 4 : 3
-        } else {
-          // Normal circle
-          radius = highlight ? 5 : 4
+          const arcLen = (Math.PI * 2) / types.length
+          types.forEach((type, idx) => {
+            ctx.moveTo(pos[0], pos[1])
+            ctx.fillStyle = type
+            ctx.arc(
+              pos[0],
+              pos[1],
+              radius,
+              arcLen * idx + ROTATION_OFFSET,
+              Math.PI * 2 + ROTATION_OFFSET
+            )
+            ctx.fill()
+            ctx.beginPath()
+          })
+          //add stroke dividers
+          ctx.save()
+          ctx.strokeStyle = 'black'
+          ctx.lineWidth = 0.5
+          types.forEach((_, idx) => {
+            ctx.moveTo(pos[0], pos[1])
+            const xOffset = Math.cos(arcLen * idx + ROTATION_OFFSET) * radius
+            const yOffset = Math.sin(arcLen * idx + ROTATION_OFFSET) * radius
+            ctx.lineTo(pos[0] + xOffset, pos[1] + yOffset)
+          })
+          ctx.stroke()
+          ctx.restore()
+          ctx.beginPath()
         }
         ctx.arc(pos[0], pos[1], radius, 0, Math.PI * 2)
       }
@@ -181,6 +228,7 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
 
     if (doFill) ctx.fill()
     if (!lowQuality && doStroke) ctx.stroke()
+    ctx.restore()
 
     // render slot label
     const hideLabel = lowQuality || this.isWidgetInputSlot
@@ -221,6 +269,25 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
     ctx.lineWidth = originalLineWidth
   }
 
+  /**
+   * Custom JSON serialization to prevent circular reference errors.
+   * Returns only serializable slot properties without the node back-reference.
+   */
+  toJSON(): INodeSlot {
+    return {
+      name: this.name,
+      type: this.type,
+      label: this.label,
+      color_on: this.color_on,
+      color_off: this.color_off,
+      shape: this.shape,
+      dir: this.dir,
+      localized_name: this.localized_name,
+      pos: this.pos,
+      boundingRect: [...this.boundingRect] as [number, number, number, number]
+    }
+  }
+
   drawCollapsed(ctx: CanvasRenderingContext2D) {
     const [x, y] = this.collapsedPos
 
@@ -234,7 +301,7 @@ export abstract class NodeSlot extends SlotBase implements INodeSlot {
       ctx.rect(x - 7 + 0.5, y - 4, 14, 8)
     } else if (this.shape === RenderShape.ARROW) {
       // Adjust arrow direction based on whether this is an input or output slot
-      const isInput = this instanceof NodeInputSlot
+      const isInput = isNodeInputSlot(this)
       if (isInput) {
         ctx.moveTo(x + 8, y)
         ctx.lineTo(x - 4, y - 4)

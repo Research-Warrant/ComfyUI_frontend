@@ -1,76 +1,213 @@
-import { definePreset } from '@primevue/themes'
-import Aura from '@primevue/themes/aura'
-import * as Sentry from '@sentry/vue'
-import { initializeApp } from 'firebase/app'
+import { captureMessage } from '@sentry/vue'
 import { createPinia } from 'pinia'
+import type { Pinia } from 'pinia'
 import 'primeicons/primeicons.css'
-import PrimeVue from 'primevue/config'
-import ConfirmationService from 'primevue/confirmationservice'
-import ToastService from 'primevue/toastservice'
-import Tooltip from 'primevue/tooltip'
 import { createApp } from 'vue'
-import { VueFire, VueFireAuth } from 'vuefire'
+import type { App as VueApp } from 'vue'
 
-import { FIREBASE_CONFIG } from '@/config/firebase'
+import { setAssertReporter } from '@/base/assert'
+import { flushProxyWidgetMigration } from '@/core/graph/subgraph/migration/proxyWidgetMigration'
+import { autoExposeKnownPreviewNodes } from '@/core/graph/subgraph/promotionUtils'
+import { LGraph } from '@/lib/litegraph/src/litegraph'
+import { installCloudApiAuth } from '@/platform/auth/cloudApiAuthProvider'
+import { firebaseIdentity } from '@/platform/auth/firebaseIdentity'
+import {
+  configValueOrDefault,
+  remoteConfig
+} from '@/platform/remoteConfig/remoteConfig'
+import { reportAssertFailure } from '@/platform/telemetry/assertFailureReporter'
+import { initSentry } from '@/platform/telemetry/initSentry'
+import {
+  markStoresPending,
+  markStoresReady
+} from '@/platform/telemetry/storeReadiness'
+import { syncHostUserIdWithFirebaseAuth } from '@/platform/telemetry/hostUserIdSync'
+import '@/platform/telemetry/initErrorReporter'
+import { flushErrorReports } from '@comfyorg/telemetry/reportError'
+import { bootstrapTracer } from '@/platform/telemetry/perf/bootstrapTracer'
 import '@/lib/litegraph/public/css/litegraph.css'
-import router from '@/router'
+import { createAppRouter } from '@/router'
+import { captureSafeExtensionBoot } from '@/platform/customNodes/safeExtensionBoot'
+import { isDesktop, isNightly } from '@/platform/distribution/types'
+import { stripPaymentReturnParams } from '@/platform/billing/subscription/utils/paymentReturnUrl'
+import { useToast } from '@/components/ui/toast/toastStore'
+import { createToastId } from '@/types/toastId'
+import { installWorkspaceApiAuth } from '@/platform/workspace/api/workspaceApiAuth'
+import { api } from '@/scripts/api'
+import { useBootstrapStore } from '@/stores/bootstrapStore'
+import { attachLegacyUI } from '@/core/legacyUI/attachLegacyUI'
+import { handleDesktopWorkflowHandoff } from '@/platform/openOnCloud/desktopWorkflowRelay'
 
 import App from './App.vue'
 // Intentionally relative import to ensure the CSS is loaded in the right order (after litegraph.css)
 import './assets/css/style.css'
-import { i18n } from './i18n'
+import { i18n, t } from './i18n'
 
 // Override console methods in production
 if (!import.meta.env.DEV) {
   void import('./utils/console-override')
 }
 
-const ComfyUIPreset = definePreset(Aura, {
-  semantic: {
-    // @ts-expect-error fixme ts strict error
-    primary: Aura['primitive'].blue
+const isCloud = __DISTRIBUTION__ === 'cloud'
+const hasHostTelemetryBridge = Boolean(window.__comfyDesktop2?.Telemetry)
+
+async function loadRemoteConfigBeforeFirebase(): Promise<void> {
+  await bootstrapTracer.settle('startup/remote-config', async () => {
+    const { loadRemoteConfigUntilReady, refreshRemoteConfig } =
+      await import('@/platform/remoteConfig/refreshRemoteConfig')
+    if (isCloud) await loadRemoteConfigUntilReady()
+    else await refreshRemoteConfig({ useAuth: false })
+  })
+}
+
+async function startTelemetry(): Promise<void> {
+  if (isCloud) {
+    await bootstrapTracer.settle('startup/telemetry-init', async () => {
+      const { initTelemetry } =
+        await import('@/platform/telemetry/initTelemetry')
+      await initTelemetry()
+    })
+
+    const { startFeatureFlagTelemetry } =
+      await import('@/composables/useFeatureFlags')
+    const stopFeatureFlagTelemetry = startFeatureFlagTelemetry()
+    import.meta.hot?.dispose(stopFeatureFlagTelemetry)
   }
-})
 
-const firebaseApp = initializeApp(FIREBASE_CONFIG)
+  if (hasHostTelemetryBridge) {
+    const { initHostTelemetry } =
+      await import('@/platform/telemetry/initHostTelemetry')
+    initHostTelemetry()
+  }
+}
 
-const app = createApp(App)
-const pinia = createPinia()
-Sentry.init({
-  app,
-  dsn: __SENTRY_DSN__,
-  enabled: __SENTRY_ENABLED__,
-  release: __COMFYUI_FRONTEND_VERSION__,
-  integrations: [],
-  autoSessionTracking: false,
-  defaultIntegrations: false,
-  normalizeDepth: 8,
-  tracesSampleRate: 0
-})
-app.directive('tooltip', Tooltip)
-app
-  .use(router)
-  .use(PrimeVue, {
-    theme: {
-      preset: ComfyUIPreset,
-      options: {
-        prefix: 'p',
-        cssLayer: {
-          name: 'primevue',
-          order: 'primevue, tailwind-utilities'
-        },
-        // This is a workaround for the issue with the dark mode selector
-        // https://github.com/primefaces/primevue/issues/5515
-        darkModeSelector: '.dark-theme, :root:has(.dark-theme)'
-      }
+async function startLocalAuthSession(): Promise<boolean> {
+  if (isCloud) return false
+  return bootstrapTracer.settle('startup/local-auth', async () => {
+    const desktopHostAuth = window.__comfyDesktop2?.Auth
+    if (desktopHostAuth) {
+      const { startDesktopHostSession } =
+        await import('@/platform/auth/desktopHost/desktopHostSession')
+      await startDesktopHostSession(desktopHostAuth)
+      return false
     }
+    const { startLocalWebSession } =
+      await import('@/platform/auth/localWeb/localWebSession')
+    const signInNotice = createToastId()
+    const started = await startLocalWebSession({
+      onPopupBlocked: () =>
+        useToast().error(t('auth.desktopHost.popupBlocked'), {
+          id: signInNotice
+        }),
+      onSignInFailed: () =>
+        useToast().error(t('auth.desktopHost.signInFailed'), {
+          id: signInNotice
+        })
+    })
+    return started === 'sign-in-failed'
   })
-  .use(ConfirmationService)
-  .use(ToastService)
-  .use(pinia)
-  .use(i18n)
-  .use(VueFire, {
-    firebaseApp,
-    modules: [VueFireAuth()]
-  })
-  .mount('#vue-app')
+}
+
+function showLocalSignInFailure(pinia: Pinia, failed: boolean): void {
+  if (failed) useToast(pinia).error(t('auth.desktopHost.signInFailed'))
+}
+
+function initFirebaseIdentity(): void {
+  const phaseFirebase = bootstrapTracer.startPhase('startup/firebase-init')
+  try {
+    firebaseIdentity.initialize()
+  } finally {
+    phaseFirebase.stop()
+  }
+}
+
+function resolveRuntimeSentryDsn(): string {
+  return isCloud
+    ? configValueOrDefault(remoteConfig.value, 'sentry_dsn', __SENTRY_DSN__)
+    : __SENTRY_DSN__
+}
+
+function initErrorReporting(app: VueApp, pinia: Pinia): void {
+  const dsn = resolveRuntimeSentryDsn()
+  const phaseSentry = bootstrapTracer.startPhase('startup/sentry-init')
+  initSentry({ app, dsn, enabled: !import.meta.env.DEV && !!dsn, isCloud })
+  phaseSentry.stop()
+
+  flushErrorReports()
+
+  setAssertReporter(
+    (message, context) => {
+      if (isDesktop) {
+        captureMessage(message, { level: 'warning', extra: context })
+      }
+      if (isCloud) {
+        reportAssertFailure(message, context)
+      }
+      if (isNightly) {
+        useToast(pinia).warning('Assertion failed', { description: message })
+      }
+    },
+    { forwardsToRum: isCloud }
+  )
+}
+
+function installSubgraphGraphHooks(): void {
+  LGraph.proxyWidgetMigrationFlush = (hostNode, nodeData) =>
+    flushProxyWidgetMigration({
+      hostNode,
+      hostWidgetValues: nodeData?.widgets_values
+    })
+
+  LGraph.autoExposePreviewNodes = (hostNode) =>
+    autoExposeKnownPreviewNodes(hostNode)
+}
+
+async function bootstrap(): Promise<void> {
+  bootstrapTracer.recordSinceTimeOrigin('startup/entry-modules')
+  api.captureLaunchContext()
+  captureSafeExtensionBoot()
+
+  if (isCloud) {
+    stripPaymentReturnParams()
+    installCloudApiAuth()
+  }
+  installWorkspaceApiAuth()
+
+  bootstrapTracer.armWatchdog()
+
+  await loadRemoteConfigBeforeFirebase()
+
+  markStoresPending()
+
+  await startTelemetry()
+  const localSignInFailed = await startLocalAuthSession()
+  initFirebaseIdentity()
+
+  const pinia = createPinia()
+  const router = await bootstrapTracer.settle('startup/router', createAppRouter)
+  const app = createApp(App)
+
+  initErrorReporting(app, pinia)
+
+  app.use(router).use(pinia).use(i18n)
+
+  markStoresReady()
+
+  showLocalSignInFailure(pinia, localSignInFailed)
+
+  if (isCloud && hasHostTelemetryBridge) {
+    syncHostUserIdWithFirebaseAuth()
+  }
+
+  installSubgraphGraphHooks()
+
+  void useBootstrapStore(pinia).startStoreBootstrap()
+
+  const detachLegacyUI = attachLegacyUI()
+  import.meta.hot?.dispose(detachLegacyUI)
+
+  app.mount('#vue-app')
+  bootstrapTracer.milestone('app-mounted')
+}
+
+if (!(await handleDesktopWorkflowHandoff())) await bootstrap()

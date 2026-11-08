@@ -1,11 +1,12 @@
+import type { MinBounds } from '@comfyorg/shared-frontend-utils/geometry'
 import { ref } from 'vue'
-import type { Ref } from 'vue'
+import type { Ref, ShallowRef } from 'vue'
 
-import type { MinimapCanvas } from '../types'
+import type { MinimapCanvas } from '@/renderer/extensions/minimap/types'
 
 export function useMinimapInteraction(
-  containerRef: Ref<HTMLDivElement | undefined>,
-  bounds: Ref<{ minX: number; minY: number; width: number; height: number }>,
+  containerRef: Readonly<ShallowRef<HTMLDivElement | null>>,
+  bounds: Ref<MinBounds>,
   scale: Ref<number>,
   width: number,
   height: number,
@@ -35,6 +36,10 @@ export function useMinimapInteraction(
   const handlePointerDown = (e: PointerEvent) => {
     isDragging.value = true
     updateContainerRect()
+    const target = e.currentTarget
+    if (target instanceof HTMLElement) {
+      target.setPointerCapture(e.pointerId)
+    }
     handlePointerMove(e)
   }
 
@@ -53,9 +58,22 @@ export function useMinimapInteraction(
     centerViewOn(worldX, worldY)
   }
 
-  const handlePointerUp = () => {
+  const releasePointer = (e?: PointerEvent) => {
     isDragging.value = false
+    if (!e) return
+
+    const target = e.currentTarget
+    if (
+      target instanceof HTMLElement &&
+      target.hasPointerCapture(e.pointerId)
+    ) {
+      target.releasePointerCapture(e.pointerId)
+    }
   }
+
+  const handlePointerUp = releasePointer
+
+  const handlePointerCancel = releasePointer
 
   const handleWheel = (e: WheelEvent) => {
     e.preventDefault()
@@ -102,6 +120,7 @@ export function useMinimapInteraction(
     handlePointerDown,
     handlePointerMove,
     handlePointerUp,
+    handlePointerCancel,
     handleWheel
   }
 }

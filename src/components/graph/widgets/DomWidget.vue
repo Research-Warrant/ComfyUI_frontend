@@ -2,13 +2,14 @@
   <div
     v-show="widgetState.visible"
     ref="widgetElement"
-    class="dom-widget"
+    class="dom-widget size-full"
     :title="tooltip"
     :style="style"
   >
     <component
       :is="widget.component"
       v-if="isComponentWidget(widget)"
+      class="size-full"
       :model-value="widget.value"
       :widget="widget"
       v-bind="widget.props"
@@ -18,15 +19,19 @@
 </template>
 
 <script setup lang="ts">
-import { useElementBounding, useEventListener } from '@vueuse/core'
-import { CSSProperties, computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useElementBounding, useEventListener, whenever } from '@vueuse/core'
+import type { CSSProperties } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 import { useAbsolutePosition } from '@/composables/element/useAbsolutePosition'
 import { useDomClipping } from '@/composables/element/useDomClipping'
+import { findFirstNode } from '@/lib/litegraph/src/utils/collections'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
 import { isComponentWidget, isDOMWidget } from '@/scripts/domWidget'
-import { DomWidgetState } from '@/stores/domWidgetStore'
-import { useCanvasStore } from '@/stores/graphStore'
-import { useSettingStore } from '@/stores/settingStore'
+import type { DomWidgetState } from '@/stores/domWidgetStore'
+
+import { reportDomWidgetMountFailure } from './domWidgetMountReporting'
 
 const { widgetState } = defineProps<{
   widgetState: DomWidgetState
@@ -38,13 +43,6 @@ const emit = defineEmits<{
 }>()
 
 const widgetElement = ref<HTMLElement | undefined>()
-
-/**
- * @note Do NOT convert style to a computed value, as it will cause lag when
- * updating the style on different animation frames. Vue's computed value is
- * evaluated asynchronously.
- */
-const style = ref<CSSProperties>({})
 const { style: positionStyle, updatePosition } = useAbsolutePosition({
   useTransform: true
 })
@@ -55,19 +53,33 @@ const settingStore = useSettingStore()
 const enableDomClipping = computed(() =>
   settingStore.get('Comfy.DOMClippingEnabled')
 )
+const style = computed<CSSProperties>(() => {
+  const isDisabled = widget.computedDisabled
+
+  return {
+    ...positionStyle.value,
+    ...(enableDomClipping.value ? clippingStyle.value : {}),
+    zIndex: widgetState.zIndex,
+    pointerEvents:
+      !widgetState.visible || widgetState.readonly || isDisabled
+        ? 'none'
+        : 'auto',
+    opacity: isDisabled ? 0.5 : 1
+  }
+})
 
 const updateDomClipping = () => {
   const lgCanvas = canvasStore.canvas
   if (!lgCanvas || !widgetElement.value) return
 
-  const selectedNode = Object.values(lgCanvas.selected_nodes ?? {})[0]
+  const selectedNode = findFirstNode(lgCanvas.selectedItems)
   if (!selectedNode) {
     // Clear clipping when no node is selected
     updateClipPath(widgetElement.value, lgCanvas.canvas, false, undefined)
     return
   }
 
-  const isSelected = selectedNode === widget.node
+  const isSelected = selectedNode === widgetState.widget.node
   const renderArea = selectedNode?.renderArea
   const offset = lgCanvas.ds.offset
   const scale = lgCanvas.ds.scale
@@ -96,24 +108,27 @@ const updateDomClipping = () => {
  * and update the position of the widget accordingly.
  */
 const { left, top } = useElementBounding(canvasStore.getCanvas().canvas)
+
 watch(
-  [() => widgetState, left, top],
-  ([widgetState, _, __]) => {
+  [
+    () => widgetState.pos,
+    () => widgetState.size,
+    // Visibility transitions (e.g. LOD low_quality flipping) must refresh
+    // style: while invisible, DomWidgets.vue does not update widgetState
+    // and ds.offset/ds.scale are non-reactive, so updatePosition must be
+    // re-run against the current viewport when the widget reappears.
+    () => widgetState.visible,
+    left,
+    top,
+    enableDomClipping
+  ],
+  () => {
     updatePosition(widgetState)
     if (enableDomClipping.value) {
       updateDomClipping()
     }
-
-    style.value = {
-      ...positionStyle.value,
-      ...(enableDomClipping.value ? clippingStyle.value : {}),
-      zIndex: widgetState.zIndex,
-      pointerEvents:
-        widgetState.readonly || widget.computedDisabled ? 'none' : 'auto',
-      opacity: widget.computedDisabled ? 0.5 : 1
-    }
   },
-  { deep: true }
+  { immediate: true }
 )
 
 watch(
@@ -124,59 +139,61 @@ watch(
     }
   }
 )
-
-// Set up event listeners only after the widget is mounted and visible
-const setupDOMEventListeners = () => {
-  if (!isDOMWidget(widget) || !widgetState.visible) return
-
-  if (widget.element.blur) {
-    useEventListener(document, 'mousedown', (event) => {
-      if (!widget.element.contains(event.target as HTMLElement)) {
-        widget.element.blur()
-      }
-    })
+useEventListener(document, 'mousedown', (event) => {
+  if (!isDOMWidget(widget) || !widgetState.visible || !widget.element.blur) {
+    return
   }
+  if (!widget.element.contains(event.target as HTMLElement)) {
+    widget.element.blur()
+  }
+})
 
-  for (const evt of widget.options.selectOn ?? ['focus', 'click']) {
-    useEventListener(widget.element, evt, () => {
+onMounted(() => {
+  if (!isDOMWidget(widget)) {
+    return
+  }
+  useEventListener(
+    widget.element,
+    widget.options.selectOn ?? ['focus', 'click'],
+    () => {
       const lgCanvas = canvasStore.canvas
-      lgCanvas?.selectNode(widget.node)
-      lgCanvas?.bringToFront(widget.node)
-    })
-  }
-}
+      if (!lgCanvas) return
 
-// Set up event listeners when widget becomes visible
-watch(
-  () => widgetState.visible,
-  (visible) => {
-    if (visible) {
-      setupDOMEventListeners()
+      const ownerNode = widgetState.widget.node
+      lgCanvas.selectNode(ownerNode)
+      lgCanvas.bringToFront(ownerNode)
     }
-  },
-  { immediate: true }
-)
+  )
+})
 
 const inputSpec = widget.node.constructor.nodeData
 const tooltip = inputSpec?.inputs?.[widget.name]?.tooltip
 
 // Mount DOM element when widget is or becomes visible
 const mountElementIfVisible = () => {
-  if (widgetState.visible && isDOMWidget(widget) && widgetElement.value) {
-    // Only append if not already a child
-    if (!widgetElement.value.contains(widget.element)) {
-      widgetElement.value.appendChild(widget.element)
-    }
+  if (!(widgetState.visible && isDOMWidget(widget) && widgetElement.value)) {
+    return
+  }
+  // Only append if not already a child
+  if (widgetElement.value.contains(widget.element)) {
+    return
+  }
+
+  try {
+    widget.element.classList.add('h-full', 'w-full')
+    widgetElement.value.appendChild(widget.element)
+  } catch (error) {
+    reportDomWidgetMountFailure(error, {
+      nodeId: widget.node.id,
+      nodeType: widget.node.type,
+      widgetName: widget.name
+    })
   }
 }
 
 // Check on mount - but only after next tick to ensure visibility is calculated
 onMounted(() => {
-  nextTick(() => {
-    mountElementIfVisible()
-  }).catch((error) => {
-    console.error('Error mounting DOM widget element:', error)
-  })
+  void nextTick(mountElementIfVisible)
 })
 
 // And watch for visibility changes
@@ -186,10 +203,6 @@ watch(
     mountElementIfVisible()
   }
 )
-</script>
 
-<style scoped>
-.dom-widget > * {
-  @apply h-full w-full;
-}
-</style>
+whenever(() => !canvasStore.linearMode, mountElementIfVisible)
+</script>

@@ -1,75 +1,84 @@
 <template>
   <div class="relative">
     <Button
-      v-show="canvasStore.nodeSelected || canvasStore.groupSelected"
-      v-tooltip.top="{
-        value: localizedCurrentColorName ?? t('color.noColor'),
-        showDelay: 512
-      }"
-      severity="secondary"
-      text
+      :tooltip="localizedCurrentColorName ?? t('color.noColor')"
+      variant="muted-textonly"
+      :aria-label="t('g.color')"
       @click="() => (showColorPicker = !showColorPicker)"
     >
-      <template #icon>
-        <div class="flex items-center gap-1">
-          <i class="pi pi-circle-fill" :style="{ color: currentColor ?? '' }" />
-          <i class="pi pi-chevron-down" :style="{ fontSize: '0.5rem' }" />
-        </div>
-      </template>
+      <div class="flex items-center gap-1 px-0">
+        <i
+          class="pi pi-circle-fill"
+          data-testid="color-picker-current-color"
+          :style="{ color: currentColor ?? '' }"
+        />
+        <i class="icon-[lucide--chevron-down]" />
+      </div>
     </Button>
     <div
       v-if="showColorPicker"
-      class="color-picker-container absolute -top-10 left-1/2"
+      class="absolute -top-10 left-1/2 -translate-x-1/2"
     >
-      <SelectButton
-        :model-value="selectedColorOption"
-        :options="colorOptions"
-        option-label="name"
-        data-key="value"
-        @update:model-value="applyColor"
+      <ToggleGroup
+        :model-value="selectedColorOption?.name"
+        type="single"
+        @update:model-value="applyColorName"
       >
-        <template #option="{ option }">
-          <i
-            v-tooltip.top="option.localizedName"
-            class="pi pi-circle-fill"
-            :style="{
-              color: isLightTheme ? option.value.light : option.value.dark
-            }"
-            :data-testid="option.name"
-          />
-        </template>
-      </SelectButton>
+        <TextTooltip
+          v-for="option in colorOptions"
+          :key="option.name"
+          :text="option.localizedName"
+        >
+          <ToggleGroupItem
+            :value="option.name"
+            :aria-label="option.localizedName"
+            class="px-1 py-2 aria-pressed:bg-secondary aria-pressed:text-foreground"
+          >
+            <i
+              class="pi pi-circle-fill"
+              :style="{
+                color: isLightTheme ? option.value.light : option.value.dark
+              }"
+              :data-testid="option.name"
+            />
+          </ToggleGroupItem>
+        </TextTooltip>
+      </ToggleGroup>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import Button from 'primevue/button'
-import SelectButton from 'primevue/selectbutton'
+import { toLightThemeNodeColor } from '@/renderer/extensions/vueNodes/utils/nodeStyleUtils'
+import { useEventListener } from '@vueuse/core'
+import type { Raw } from 'vue'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import type { ColorOption as CanvasColorOption } from '@/lib/litegraph/src/litegraph'
+import Button from '@comfyorg/design-system/button/Button'
+import ToggleGroup from '@comfyorg/design-system/toggle-group/ToggleGroup'
+import ToggleGroupItem from '@comfyorg/design-system/toggle-group/ToggleGroupItem'
+import TextTooltip from '@comfyorg/design-system/tooltip/TextTooltip'
+import type {
+  ColorOption as CanvasColorOption,
+  LiteGraphCanvasEvent,
+  Positionable
+} from '@/lib/litegraph/src/litegraph'
 import {
   LGraphCanvas,
   LiteGraph,
   isColorable
 } from '@/lib/litegraph/src/litegraph'
-import { useCanvasStore } from '@/stores/graphStore'
-import { useWorkflowStore } from '@/stores/workflowStore'
+import { useWorkflowStore } from '@/platform/workflow/management/stores/workflowStore'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
 import { useColorPaletteStore } from '@/stores/workspace/colorPaletteStore'
-import { adjustColor } from '@/utils/colorUtil'
 import { getItemsColorOption } from '@/utils/litegraphUtil'
 
 const { t } = useI18n()
 const canvasStore = useCanvasStore()
 const colorPaletteStore = useColorPaletteStore()
 const workflowStore = useWorkflowStore()
-const isLightTheme = computed(
-  () => colorPaletteStore.completedActivePalette.light_theme
-)
-const toLightThemeColor = (color: string) =>
-  adjustColor(color, { lightness: 0.5 })
+const isLightTheme = computed(() => colorPaletteStore.colorScheme === 'light')
 
 const showColorPicker = ref(false)
 
@@ -87,7 +96,7 @@ const NO_COLOR_OPTION: ColorOption = {
   localizedName: t('color.noColor'),
   value: {
     dark: LiteGraph.NODE_DEFAULT_BGCOLOR,
-    light: toLightThemeColor(LiteGraph.NODE_DEFAULT_BGCOLOR)
+    light: toLightThemeNodeColor(LiteGraph.NODE_DEFAULT_BGCOLOR)
   }
 }
 const colorOptions: ColorOption[] = [
@@ -97,12 +106,19 @@ const colorOptions: ColorOption[] = [
     localizedName: t(`color.${name}`),
     value: {
       dark: color.bgcolor,
-      light: toLightThemeColor(color.bgcolor)
+      light: toLightThemeNodeColor(color.bgcolor)
     }
   }))
 ]
 
 const selectedColorOption = ref<ColorOption | null>(null)
+const applyColorName = (value: unknown) => {
+  if (typeof value === 'string') {
+    applyColor(colorOptions.find((option) => option.name === value) ?? null)
+  } else {
+    applyColor(null)
+  }
+}
 const applyColor = (colorOption: ColorOption | null) => {
   const colorName = colorOption?.name ?? NO_COLOR_OPTION.name
   const canvasColorOption =
@@ -117,16 +133,17 @@ const applyColor = (colorOption: ColorOption | null) => {
   }
 
   canvasStore.canvas?.setDirty(true, true)
+  selectedColorOption.value = colorOption
   currentColorOption.value = canvasColorOption
   showColorPicker.value = false
-  workflowStore.activeWorkflow?.changeTracker.checkState()
+  workflowStore.activeWorkflow?.changeTracker?.captureCanvasState()
 }
 
 const currentColorOption = ref<CanvasColorOption | null>(null)
 const currentColor = computed(() =>
   currentColorOption.value
     ? isLightTheme.value
-      ? toLightThemeColor(currentColorOption.value?.bgcolor)
+      ? toLightThemeNodeColor(currentColorOption.value?.bgcolor)
       : currentColorOption.value?.bgcolor
     : null
 )
@@ -140,23 +157,27 @@ const localizedCurrentColorName = computed(() => {
   )
   return colorOption?.localizedName ?? NO_COLOR_OPTION.localizedName
 })
-
+const updateColorSelectionFromNode = (
+  newSelectedItems: Raw<Positionable[]>
+) => {
+  showColorPicker.value = false
+  selectedColorOption.value = null
+  currentColorOption.value = getItemsColorOption(newSelectedItems)
+}
+useEventListener(
+  document,
+  'litegraph:canvas',
+  (event: LiteGraphCanvasEvent) => {
+    if (event.detail.subType === 'after-change') {
+      updateColorSelectionFromNode(canvasStore.selectedItems)
+    }
+  }
+)
 watch(
   () => canvasStore.selectedItems,
   (newSelectedItems) => {
-    showColorPicker.value = false
-    selectedColorOption.value = null
-    currentColorOption.value = getItemsColorOption(newSelectedItems)
-  }
+    updateColorSelectionFromNode(newSelectedItems)
+  },
+  { immediate: true }
 )
 </script>
-
-<style scoped>
-.color-picker-container {
-  transform: translateX(-50%);
-}
-
-:deep(.p-togglebutton) {
-  @apply py-2 px-1;
-}
-</style>

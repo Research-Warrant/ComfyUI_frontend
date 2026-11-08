@@ -12,16 +12,17 @@ Storybook is a frontend workshop for building UI components and pages in isolati
 
 ## Storybook vs Other Testing Tools
 
-| Tool | Purpose | Use Case |
-|------|---------|----------|
-| **Storybook** | Component isolation & documentation | Developing, testing, and showcasing individual UI components |
-| **Playwright** | End-to-end testing | Full user workflow testing across multiple pages |
-| **Vitest** | Unit testing | Testing business logic, utilities, and component behavior |
-| **Vue Testing Library** | Component testing | Testing component interactions and DOM output |
+| Tool                    | Purpose                             | Use Case                                                     |
+| ----------------------- | ----------------------------------- | ------------------------------------------------------------ |
+| **Storybook**           | Component isolation & documentation | Developing, testing, and showcasing individual UI components |
+| **Playwright**          | End-to-end testing                  | Full user workflow testing across multiple pages             |
+| **Vitest**              | Unit testing                        | Testing business logic, utilities, and component behavior    |
+| **Vue Testing Library** | Component testing                   | Testing component interactions and DOM output                |
 
 ### When to Use Storybook
 
 **✅ Use Storybook for:**
+
 - Developing new UI components in isolation
 - Creating component documentation and examples
 - Testing different component states and props
@@ -30,6 +31,7 @@ Storybook is a frontend workshop for building UI components and pages in isolati
 - Building a component library or design system
 
 **❌ Don't use Storybook for:**
+
 - Testing complex user workflows (use Playwright)
 - Testing business logic (use Vitest)
 - Integration testing between components (use Vue Testing Library)
@@ -40,19 +42,19 @@ Storybook is a frontend workshop for building UI components and pages in isolati
 
 ```bash
 # Start Storybook development server
-npm run storybook
+pnpm storybook
 
 # Build static Storybook for deployment
-npm run build-storybook
+pnpm build-storybook
 ```
 
 ### Creating Stories
 
-Stories are located alongside components in `src/` directories with the pattern `*.stories.ts`:
+Conventions live in `docs/guidance/storybook.md`: a story is a named scenario, and enum or boolean props are controls. Stories are located alongside components in `src/` directories with the pattern `*.stories.ts`:
 
 ```typescript
 // MyComponent.stories.ts
-import type { Meta, StoryObj } from '@storybook/vue3'
+import type { Meta, StoryObj } from '@storybook/vue3-vite'
 import MyComponent from './MyComponent.vue'
 
 const meta: Meta<typeof MyComponent> = {
@@ -83,8 +85,7 @@ export const WithVariant: Story = {
 ### Available Features
 
 - **Vue 3 Support**: Full Vue 3 composition API and reactivity
-- **PrimeVue Integration**: All PrimeVue components and theming
-- **ComfyUI Theming**: Custom ComfyUI theme preset applied
+- **ComfyUI Theming**: Design-system tokens and dark/light themes applied
 - **Pinia Stores**: Access to application stores for components that need state
 - **TypeScript**: Full TypeScript support with proper type checking
 - **CSS/SCSS**: Component styling support
@@ -92,6 +93,46 @@ export const WithVariant: Story = {
 - **Chromatic Integration**: Automated visual regression testing for component stories
 
 ## Development Tips
+
+## ComfyUI Storybook Guidelines
+
+### Scope – When to Create Stories
+
+- **Design system components** (`src/components/ui`):  
+  Always create stories. These components are built in collaboration with designers, and Storybook serves as both documentation and a communication tool.
+- **Container components (logic-heavy)**:  
+  Do not create stories. Only the underlying pure UI components should be included in Storybook.
+
+### Maintenance Philosophy
+
+- Stories are lightweight and generally stable.  
+  Once created, they rarely need updates unless:
+  - The design changes
+  - New props (e.g. size, color variants) are introduced
+- For existing usage patterns, simply copy real code examples into Storybook to create stories.
+
+### File Placement
+
+- Keep `*.stories.ts` files at the **same level as the component** (similar to test files).
+- This makes it easier to check usage examples without navigating to another directory.
+
+### Developer/Designer Workflow
+
+- **UI vs Container**: Separate pure UI components from container components.  
+  Only UI components should live in Storybook.
+- **Communication Tool**: Storybook is not just about code quality—it enables designers and developers to see:
+  - Which props exist
+  - What cases are covered
+  - How variants (e.g. size, colors) look in isolation
+- **Example**:  
+  `PackActionButton.vue` wraps the design-system `Button` with additional logic.  
+  → Only create a story for the base UI button, not for the wrapper.
+
+### Suggested Workflow
+
+1. Use Storybook for **shared components** that define our design system
+2. Keep story files alongside components
+3. When in doubt, focus on components reused across the app or those that need to be showcased to designers
 
 ### Best Practices
 
@@ -135,6 +176,7 @@ export const WithLongText: Story = {
 - **`main.ts`**: Core Storybook configuration and Vite integration
 - **`preview.ts`**: Global decorators, parameters, and Vue app setup
 - **`manager.ts`**: Storybook UI customization (if needed)
+- **`preview-head.html`**: Injects custom HTML into the `<head>` of every Storybook iframe (used for global styles, fonts, or fixes for iframe-specific issues)
 
 ## Chromatic Visual Testing
 
@@ -142,10 +184,9 @@ This project uses [Chromatic](https://chromatic.com) for automated visual regres
 
 ### How It Works
 
-- **Automated Testing**: Every push to `main` and `sno-storybook` branches triggers Chromatic builds
-- **Pull Request Reviews**: PRs against `main` branch include visual diffs for component changes
+- **When it runs**: `version-bump-*` release branches and manual `workflow_dispatch` (`.github/workflows/ci-tests-storybook.yaml`). Ordinary PRs build Storybook and deploy a Cloudflare preview; they do not snapshot.
+- **What it snapshots**: every story export (`onlyChanged: true` limits a build to stories affected by the diff). Each export is a recurring snapshot.
 - **Baseline Management**: Changes on `main` branch are automatically accepted as new baselines
-- **Cross-browser Testing**: Tests across multiple browsers and viewports
 
 ### Viewing Results
 
@@ -167,7 +208,21 @@ This Storybook setup includes:
 - ComfyUI-specific theming and styling
 - Pre-configured Pinia stores for state management
 - Internationalization (i18n) support
-- PrimeVue component library integration
 - Proper alias resolution for `@/` imports
 
-For component-specific examples, see the NodePreview stories in `src/components/node/`.
+## Icon Usage in Storybook
+
+In this project, only the `<i class="icon-[lucide--folder]" />` syntax from unplugin-icons is supported in Storybook.
+
+**Example:**
+
+```vue
+<script setup lang="ts"></script>
+
+<template>
+  <i class="icon-[lucide--trophy] text-neutral size-4" />
+  <i class="icon-[lucide--settings] text-neutral size-4" />
+</template>
+```
+
+This approach ensures icons render correctly in Storybook and remain consistent with the rest of the app.

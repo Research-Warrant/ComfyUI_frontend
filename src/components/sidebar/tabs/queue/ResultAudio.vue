@@ -1,19 +1,22 @@
 <template>
-  <audio controls width="100%" height="100%">
-    <source :src="url" :type="htmlAudioType" />
-    {{ $t('g.audioFailedToLoad') }}
-  </audio>
+  <div
+    class="m-auto w-[min(90vw,42rem)] rounded-2xl bg-background/80 p-8 backdrop-blur-sm"
+  >
+    <WaveAudioPlayer
+      :src="resultItemUrl(result)"
+      variant="expanded"
+      :height="120"
+      :bar-count="80"
+    />
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
-
-import { ResultItemImpl } from '@/stores/queueStore'
+import WaveAudioPlayer from '@/components/common/WaveAudioPlayer.vue'
+import type { AugmentedResultItem } from '@/utils/resultItem'
+import { resultItemUrl } from '@/utils/resultItemUrl'
 
 const { result } = defineProps<{
-  result: ResultItemImpl
+  result: AugmentedResultItem
 }>()
-
-const url = computed(() => result.url)
-const htmlAudioType = computed(() => result.htmlAudioType)
 </script>

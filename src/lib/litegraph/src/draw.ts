@@ -1,7 +1,8 @@
 import type { Rectangle } from './infrastructure/Rectangle'
-import type { CanvasColour, Rect } from './interfaces'
-import { LiteGraph } from './litegraph'
-import { LinkDirection, RenderShape, TitleMode } from './types/globalEnums'
+import type { CanvasColour } from '@comfyorg/graph-model/interfaces'
+import { litegraph } from './litegraphInstance'
+import { RenderShape, TitleMode } from '@comfyorg/graph-model/globalEnums'
+import { cachedMeasureText } from './utils/textMeasureCache'
 
 const ELLIPSIS = '\u2026'
 const TWO_DOT_LEADER = '\u2025'
@@ -22,12 +23,7 @@ export enum SlotShape {
 }
 
 /** @see LinkDirection */
-export enum SlotDirection {
-  Up = LinkDirection.UP,
-  Right = LinkDirection.RIGHT,
-  Down = LinkDirection.DOWN,
-  Left = LinkDirection.LEFT
-}
+export enum SlotDirection {}
 
 export enum LabelPosition {
   Left = 'left',
@@ -53,7 +49,7 @@ export interface IDrawBoundingOptions {
   lineWidth?: number
 }
 
-export interface IDrawTextInAreaOptions {
+interface IDrawTextInAreaOptions {
   /** The canvas to draw the text on. */
   ctx: CanvasRenderingContext2D
   /** The text to draw. */
@@ -72,7 +68,7 @@ export interface IDrawTextInAreaOptions {
  */
 export function strokeShape(
   ctx: CanvasRenderingContext2D,
-  area: Rect,
+  area: Rectangle,
   {
     shape = RenderShape.BOX,
     round_radius,
@@ -85,12 +81,12 @@ export function strokeShape(
   }: IDrawBoundingOptions = {}
 ): void {
   // These param defaults are not compile-time static, and must be re-evaluated at runtime
-  round_radius ??= LiteGraph.ROUND_RADIUS
-  color ??= LiteGraph.NODE_BOX_OUTLINE_COLOR
+  round_radius ??= litegraph().ROUND_RADIUS
+  color ??= litegraph().NODE_BOX_OUTLINE_COLOR
 
   // Adjust area if title is transparent
   if (title_mode === TitleMode.TRANSPARENT_TITLE) {
-    const height = title_height ?? LiteGraph.NODE_TITLE_HEIGHT
+    const height = title_height ?? litegraph().NODE_TITLE_HEIGHT
     area[1] -= height
     area[3] += height
   }
@@ -166,17 +162,17 @@ function truncateTextToWidth(
   if (!(maxWidth > 0)) return ''
 
   // Text fits
-  const fullWidth = ctx.measureText(text).width
+  const fullWidth = cachedMeasureText(ctx, text)
   if (fullWidth <= maxWidth) return text
 
-  const ellipsisWidth = ctx.measureText(ELLIPSIS).width * 0.75
+  const ellipsisWidth = cachedMeasureText(ctx, ELLIPSIS) * 0.75
 
   // Can't even fit ellipsis
   if (ellipsisWidth > maxWidth) {
-    const twoDotsWidth = ctx.measureText(TWO_DOT_LEADER).width * 0.75
+    const twoDotsWidth = cachedMeasureText(ctx, TWO_DOT_LEADER) * 0.75
     if (twoDotsWidth < maxWidth) return TWO_DOT_LEADER
 
-    const oneDotWidth = ctx.measureText(ONE_DOT_LEADER).width * 0.75
+    const oneDotWidth = cachedMeasureText(ctx, ONE_DOT_LEADER) * 0.75
     return oneDotWidth < maxWidth ? ONE_DOT_LEADER : ''
   }
 
@@ -195,7 +191,7 @@ function truncateTextToWidth(
     }
 
     const sub = text.substring(0, mid)
-    const currentWidth = ctx.measureText(sub).width + ellipsisWidth
+    const currentWidth = cachedMeasureText(ctx, sub) + ellipsisWidth
 
     if (currentWidth <= maxWidth) {
       // This length fits, try potentially longer
@@ -222,7 +218,7 @@ export function drawTextInArea({
   const { left, right, bottom, width, centreX } = area
 
   // Text already fits
-  const fullWidth = ctx.measureText(text).width
+  const fullWidth = cachedMeasureText(ctx, text)
   if (fullWidth <= width) {
     ctx.textAlign = align
     const x = align === 'left' ? left : align === 'right' ? right : centreX
@@ -242,5 +238,5 @@ export function drawTextInArea({
   // Draw the ellipsis, right-aligned to the button
   ctx.textAlign = 'right'
   const ellipsis = truncated.at(-1)!
-  ctx.fillText(ellipsis, right, bottom, ctx.measureText(ellipsis).width * 0.75)
+  ctx.fillText(ellipsis, right, bottom, cachedMeasureText(ctx, ellipsis) * 0.75)
 }

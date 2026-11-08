@@ -1,0 +1,17 @@
+import type { MenuItemAction } from '@comfyorg/design-system/lib/menu/types'
+
+export type WorkflowMenuItem = WorkflowMenuSeparator | WorkflowMenuAction
+
+interface WorkflowMenuSeparator {
+  separator: true
+}
+
+export interface WorkflowMenuAction extends Omit<
+  MenuItemAction,
+  'command' | 'key'
+> {
+  separator?: false
+  visible?: boolean
+  id: string
+  command?: () => void
+}

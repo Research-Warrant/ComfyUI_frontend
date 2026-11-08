@@ -1,0 +1,62 @@
+<template>
+  <NotificationPopup
+    v-if="appModeStore.showVueNodeSwitchPopup && !canvasStore.isPickingNodes"
+    data-testid="linear-vue-node-switch-popup"
+    :title="$t('appBuilder.vueNodeSwitch.title')"
+    :close-label="$t('g.close')"
+    position="bottom-left"
+    @close="dismiss"
+  >
+    {{ $t('appBuilder.vueNodeSwitch.content') }}
+
+    <template #footer-start>
+      <label
+        class="flex cursor-pointer items-center gap-2 text-sm text-muted-foreground"
+      >
+        <input
+          v-model="dontShowAgain"
+          type="checkbox"
+          data-testid="linear-vue-node-switch-dont-show-again"
+          class="accent-primary"
+        />
+        {{ $t('appBuilder.vueNodeSwitch.dontShowAgain') }}
+      </label>
+    </template>
+
+    <template #footer-end>
+      <Button
+        variant="secondary"
+        size="lg"
+        data-testid="linear-vue-node-switch-dismiss"
+        class="font-normal"
+        @click="dismiss"
+      >
+        {{ $t('appBuilder.vueNodeSwitch.dismiss') }}
+      </Button>
+    </template>
+  </NotificationPopup>
+</template>
+
+<script setup lang="ts">
+import { ref } from 'vue'
+
+import NotificationPopup from '@comfyorg/design-system/common/NotificationPopup'
+import Button from '@comfyorg/design-system/button/Button'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import { useCanvasStore } from '@/renderer/core/canvas/canvasStore'
+import { useAppModeStore } from '@/stores/appModeStore'
+
+const appModeStore = useAppModeStore()
+// Node selection mode keeps the canvas clear of everything but the graph and
+// its own banner, so this popup steps aside for the duration and returns after.
+const canvasStore = useCanvasStore()
+const settingStore = useSettingStore()
+const dontShowAgain = ref(false)
+
+function dismiss() {
+  if (dontShowAgain.value) {
+    void settingStore.set('Comfy.AppBuilder.VueNodeSwitchDismissed', true)
+  }
+  appModeStore.showVueNodeSwitchPopup = false
+}
+</script>

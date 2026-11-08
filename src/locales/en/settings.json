@@ -25,19 +25,39 @@
       "custom": "custom"
     }
   },
+  "Comfy_Appearance_DisableAnimations": {
+    "name": "Disable animations",
+    "tooltip": "Turns off most CSS animations and transitions. Speeds up inference when the display GPU is also used for generation."
+  },
   "Comfy_Canvas_BackgroundImage": {
     "name": "Canvas background image",
     "tooltip": "Image URL for the canvas background. You can right-click an image in the outputs panel and select \"Set as Background\" to use it, or upload your own image using the upload button."
   },
+  "Comfy_Canvas_LeftMouseClickBehavior": {
+    "name": "Left Mouse Click Behavior",
+    "options": {
+      "Panning": "Panning",
+      "Select": "Select"
+    }
+  },
+  "Comfy_Canvas_MouseWheelScroll": {
+    "name": "Mouse Wheel Scroll",
+    "options": {
+      "Panning": "Panning",
+      "Zoom in/out": "Zoom in/out"
+    }
+  },
   "Comfy_Canvas_NavigationMode": {
-    "name": "Canvas Navigation Mode",
+    "name": "Navigation Mode",
     "options": {
       "Standard (New)": "Standard (New)",
-      "Left-Click Pan (Legacy)": "Left-Click Pan (Legacy)"
+      "Drag Navigation": "Drag Navigation",
+      "Custom": "Custom"
     }
   },
   "Comfy_Canvas_SelectionToolbox": {
-    "name": "Show selection toolbox"
+    "name": "Show selection toolbox",
+    "tooltip": "Display a floating toolbar when nodes are selected, providing quick access to common actions."
   },
   "Comfy_ConfirmClear": {
     "name": "Require confirmation when clearing workflow"
@@ -64,9 +84,28 @@
   "Comfy_EnableWorkflowViewRestore": {
     "name": "Save and restore canvas position and zoom level in workflows"
   },
+  "Comfy_ErrorSystem_ShowMissingModels": {
+    "name": "Show missing models in the issues tab",
+    "tooltip": "When disabled, model files that are not found are not listed in the issues tab and their nodes are not highlighted."
+  },
+  "Comfy_Execution_PreviewMethod": {
+    "name": "Live preview method",
+    "tooltip": "Live preview method during image generation. \"default\" uses the server CLI setting.",
+    "options": {
+      "default": "default",
+      "none": "none",
+      "auto": "auto",
+      "latent2rgb": "latent2rgb",
+      "taesd": "taesd"
+    }
+  },
   "Comfy_FloatRoundingPrecision": {
     "name": "Float widget rounding decimal places [0 = auto].",
     "tooltip": "(requires page reload)"
+  },
+  "Comfy_Graph_AutoPanSpeed": {
+    "name": "Auto-pan speed",
+    "tooltip": "Maximum speed when auto-panning by dragging to the canvas edge. Set to 0 to disable auto-panning."
   },
   "Comfy_Graph_CanvasInfo": {
     "name": "Show canvas info on bottom left corner (fps, etc.)"
@@ -77,6 +116,10 @@
   "Comfy_Graph_CtrlShiftZoom": {
     "name": "Enable fast-zoom shortcut (Ctrl + Shift + Drag)"
   },
+  "Comfy_Graph_DeduplicateSubgraphNodeIds": {
+    "name": "Deduplicate subgraph node IDs",
+    "tooltip": "Automatically reassign duplicate node IDs in subgraphs when loading a workflow."
+  },
   "Comfy_Graph_LinkMarkers": {
     "name": "Link midpoint markers",
     "options": {
@@ -84,6 +127,10 @@
       "Circle": "Circle",
       "Arrow": "Arrow"
     }
+  },
+  "Comfy_Graph_LiveSelection": {
+    "name": "Live selection",
+    "tooltip": "When enabled, nodes are selected/deselected in real-time as you drag the selection rectangle, similar to other design tools."
   },
   "Comfy_Graph_ZoomSpeed": {
     "name": "Canvas zoom speed"
@@ -112,6 +159,7 @@
   },
   "Comfy_LinkRenderMode": {
     "name": "Link Render Mode",
+    "tooltip": "Controls the appearance and visibility of connection links between nodes on the canvas.",
     "options": {
       "Straight": "Straight",
       "Linear": "Linear",
@@ -151,13 +199,17 @@
     "name": "Light Intensity Minimum",
     "tooltip": "Sets the minimum allowable light intensity value for 3D scenes. This defines the lower brightness limit that can be set when adjusting lighting in any 3D widget."
   },
+  "Comfy_Load3D_PLYEngine": {
+    "name": "Point Cloud Engine",
+    "tooltip": "Select the engine for loading point cloud PLY files. \"threejs\" uses the native Three.js PLYLoader (handles binary + ASCII, mesh-capable). \"fastply\" uses an optimized parser for ASCII PLY files. 3D Gaussian Splat PLYs are detected automatically and always rendered via sparkjs regardless of this setting.",
+    "options": {
+      "threejs": "threejs",
+      "fastply": "fastply"
+    }
+  },
   "Comfy_Load3D_ShowGrid": {
     "name": "Initial Grid Visibility",
     "tooltip": "Controls whether the grid is visible by default when a new 3D widget is created. This default can still be toggled individually for each widget after creation."
-  },
-  "Comfy_Load3D_ShowPreview": {
-    "name": "Initial Preview Visibility",
-    "tooltip": "Controls whether the preview screen is visible by default when a new 3D widget is created. This default can still be toggled individually for each widget after creation."
   },
   "Comfy_Locale": {
     "name": "Language"
@@ -169,10 +221,6 @@
   "Comfy_MaskEditor_UseDominantAxis": {
     "name": "Lock brush adjustment to dominant axis",
     "tooltip": "When enabled, brush adjustments will only affect size OR hardness based on which direction you move more"
-  },
-  "Comfy_MaskEditor_UseNewEditor": {
-    "name": "Use new mask editor",
-    "tooltip": "Switch to the new mask editor interface"
   },
   "Comfy_ModelLibrary_AutoLoadAll": {
     "name": "Automatically load all model folders",
@@ -188,6 +236,10 @@
   },
   "Comfy_Node_AllowImageSizeDraw": {
     "name": "Show width × height below the image preview"
+  },
+  "Comfy_Node_AlwaysShowAdvancedWidgets": {
+    "name": "Always show advanced widgets on all nodes",
+    "tooltip": "When enabled, advanced widgets are always visible on all nodes without needing to expand them individually."
   },
   "Comfy_Node_AutoSnapLinkToSlot": {
     "name": "Auto snap link to node slot",
@@ -243,12 +295,25 @@
   "Comfy_NodeBadge_ShowApiPricing": {
     "name": "Show API node pricing badge"
   },
+  "Comfy_NodeLibrary_NewDesign": {
+    "name": "New Node Library Design",
+    "tooltip": "Enable the redesigned node library sidebar with tabs (Essential, All, Custom), improved search, and hover previews."
+  },
+  "Comfy_NodeReplacement_Enabled": {
+    "name": "Enable node replacement suggestions",
+    "tooltip": "When enabled, missing nodes with known replacements will be shown as replaceable in the missing nodes dialog, allowing you to review and apply replacements."
+  },
   "Comfy_NodeSearchBoxImpl": {
     "name": "Node search box implementation",
     "options": {
       "default": "default",
+      "v1 (legacy)": "v1 (legacy)",
       "litegraph (legacy)": "litegraph (legacy)"
     }
+  },
+  "Comfy_NodeSearchBoxImpl_FollowCursor": {
+    "name": "Added nodes follow the cursor",
+    "tooltip": "When enabled, nodes added from the search box follow the cursor until clicked to place. Only applies to the default implementation."
   },
   "Comfy_NodeSearchBoxImpl_NodePreview": {
     "name": "Node preview",
@@ -256,15 +321,15 @@
   },
   "Comfy_NodeSearchBoxImpl_ShowCategory": {
     "name": "Show node category in search results",
-    "tooltip": "Only applies to the default implementation"
+    "tooltip": "Only applies to v1 (legacy)"
   },
   "Comfy_NodeSearchBoxImpl_ShowIdName": {
     "name": "Show node id name in search results",
-    "tooltip": "Only applies to the default implementation"
+    "tooltip": "Does not apply to litegraph (legacy)"
   },
   "Comfy_NodeSearchBoxImpl_ShowNodeFrequency": {
     "name": "Show node frequency in search results",
-    "tooltip": "Only applies to the default implementation"
+    "tooltip": "Only applies to v1 (legacy)"
   },
   "Comfy_NodeSuggestions_number": {
     "name": "Number of nodes suggestions",
@@ -273,10 +338,6 @@
   "Comfy_Notification_ShowVersionUpdates": {
     "name": "Show version updates",
     "tooltip": "Show updates for new models, and major new features."
-  },
-  "Comfy_Pointer_ClickBufferTime": {
-    "name": "Pointer click drift delay",
-    "tooltip": "After pressing a pointer button down, this is the maximum time (in milliseconds) that pointer movement can be ignored for.\n\nHelps prevent objects from being unintentionally nudged if the pointer is moved whilst clicking."
   },
   "Comfy_Pointer_ClickDrift": {
     "name": "Pointer click drift (maximum distance)",
@@ -297,9 +358,17 @@
     "name": "Queue history size",
     "tooltip": "The maximum number of tasks that show in the queue history."
   },
+  "Comfy_Queue_QPOV2": {
+    "name": "Docked job history/queue panel",
+    "tooltip": "Replaces the floating job queue panel with an equivalent job queue embedded in the job history side panel. You can disable this to return to the floating panel layout."
+  },
   "Comfy_QueueButton_BatchCountLimit": {
     "name": "Batch count limit",
     "tooltip": "The maximum number of tasks added to the queue at one button click"
+  },
+  "Comfy_RightSidePanel_ShowErrorsTab": {
+    "name": "Show issues tab in side panel",
+    "tooltip": "When enabled, the Issues tab is displayed in the right side panel to show blocking errors and missing resources that need setup."
   },
   "Comfy_Sidebar_Location": {
     "name": "Sidebar location",
@@ -313,6 +382,13 @@
     "options": {
       "normal": "normal",
       "small": "small"
+    }
+  },
+  "Comfy_Sidebar_Style": {
+    "name": "Sidebar style",
+    "options": {
+      "floating": "floating",
+      "connected": "connected"
     }
   },
   "Comfy_Sidebar_UnifiedWidth": {
@@ -331,17 +407,28 @@
   "Comfy_TreeExplorer_ItemPadding": {
     "name": "Tree explorer item padding"
   },
+  "Comfy_UI_TabBarLayout": {
+    "name": "Tab Bar Layout",
+    "tooltip": "Controls the elements contained in the integrated tab bar.",
+    "options": {
+      "Default": "Default",
+      "Legacy": "Legacy"
+    }
+  },
   "Comfy_UseNewMenu": {
     "name": "Use new menu",
-    "tooltip": "Menu bar position. On mobile devices, the menu is always shown at the top.",
+    "tooltip": "Enable the redesigned top menu bar.",
     "options": {
       "Disabled": "Disabled",
-      "Top": "Top",
-      "Bottom": "Bottom"
+      "Top": "Top"
     }
   },
   "Comfy_Validation_Workflows": {
     "name": "Validate workflows"
+  },
+  "Comfy_VueNodes_Enabled": {
+    "name": "Modern Node Design (Nodes 2.0)",
+    "tooltip": "Modern: DOM-based rendering with enhanced interactivity, native browser features, and updated visual design. Classic: Traditional canvas rendering."
   },
   "Comfy_WidgetControlMode": {
     "name": "Widget control mode",
@@ -368,36 +455,47 @@
   "Comfy_Workflow_ConfirmDelete": {
     "name": "Show confirmation when deleting workflows"
   },
+  "Comfy_Workflow_NamedValuesRestore": {
+    "name": "Restore widget values by name"
+  },
   "Comfy_Workflow_Persist": {
     "name": "Persist workflow state and restore on page (re)load"
   },
-  "Comfy_Workflow_ShowMissingModelsWarning": {
-    "name": "Show missing models warning"
+  "Comfy_Workflow_ShowMissingMediaWarning": {
+    "name": "Show missing media in the issues tab",
+    "tooltip": "When disabled, input images, videos and audio that are not found are not listed in the issues tab and their nodes are not highlighted."
   },
   "Comfy_Workflow_ShowMissingNodesWarning": {
-    "name": "Show missing nodes warning"
+    "name": "Show missing nodes in the issues tab",
+    "tooltip": "When disabled, missing node packs are not listed in the issues tab and their nodes are not highlighted. The workflow still cannot run until they are installed."
   },
   "Comfy_Workflow_SortNodeIdOnSave": {
     "name": "Sort node IDs when saving workflow"
+  },
+  "Comfy_Workflow_WarnBlueprintOverwrite": {
+    "name": "Require confirmation to overwrite an existing subgraph blueprint"
   },
   "Comfy_Workflow_WorkflowTabsPosition": {
     "name": "Opened workflows position",
     "options": {
       "Sidebar": "Sidebar",
-      "Topbar": "Topbar",
-      "Topbar (2nd-row)": "Topbar (2nd-row)"
+      "Topbar": "Topbar"
     }
-  },
-  "LiteGraph_Canvas_LowQualityRenderingZoomThreshold": {
-    "name": "Low quality rendering zoom threshold",
-    "tooltip": "Zoom level threshold for performance mode. Lower values (0.1) = quality at all zoom levels. Higher values (1.0) = performance mode even when zoomed in. Performance mode simplifies rendering by hiding text labels, shadows, and details."
   },
   "LiteGraph_Canvas_MaximumFps": {
     "name": "Maximum FPS",
     "tooltip": "The maximum frames per second that the canvas is allowed to render. Caps GPU usage at the cost of smoothness. If 0, the screen refresh rate is used. Default: 0"
   },
+  "LiteGraph_Canvas_MinFontSizeForLOD": {
+    "name": "Zoom Node Level of Detail - font size threshold",
+    "tooltip": "Controls when the nodes switch to low quality LOD rendering. Uses font size in pixels to determine when to switch. Set to 0 to disable. Values 1-24 set the minimum font size threshold for LOD - higher values (24px) = switch nodes to simplified rendering sooner when zooming out, lower values (1px) = maintain full node quality longer."
+  },
   "LiteGraph_ContextMenu_Scaling": {
     "name": "Scale node combo widget menus (lists) when zoomed in"
+  },
+  "LiteGraph_Group_SelectChildrenOnClick": {
+    "name": "Select group children on click",
+    "tooltip": "When enabled, clicking a group selects all nodes and items inside it"
   },
   "LiteGraph_Node_DefaultPadding": {
     "name": "Always shrink new nodes",
@@ -411,6 +509,7 @@
     "tooltip": "The bezier control point offset from the reroute centre point"
   },
   "pysssss_SnapToGrid": {
-    "name": "Always snap to grid"
+    "name": "Always snap to grid",
+    "tooltip": "When enabled, nodes will automatically align to the grid when moved or resized."
   }
 }

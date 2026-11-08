@@ -19,6 +19,7 @@
 ### How Extensions Load
 
 **Backend Flow (Python Custom Nodes):**
+
 1. ComfyUI server starts → scans `/custom_nodes/` directories
 2. Loads Python modules (e.g., `/custom_nodes/ComfyUI-Impact-Pack/__init__.py`)
 3. Python code registers new node types with the server
@@ -27,12 +28,14 @@
 
 **Frontend Flow (JavaScript):**
 
-*Core Extensions (always available):*
+_Core Extensions (always available):_
+
 1. Built directly into the frontend bundle at `/src/extensions/core/`
 2. Loaded immediately when the frontend starts
 3. No network requests needed - they're part of the compiled code
 
-*Custom Node JavaScript (loaded dynamically):*
+_Custom Node JavaScript (loaded dynamically):_
+
 1. Frontend starts → calls `/extensions` API
 2. Server responds with list of JavaScript files from:
    - `/web/extensions/*.js` (legacy location)
@@ -42,6 +45,7 @@
 5. These registered hooks enhance the UI for their associated Python nodes
 
 **The Key Distinction:**
+
 - **Python nodes** = Backend processing (what shows in your node menu)
 - **JavaScript extensions** = Frontend enhancements (how nodes look/behave in the UI)
 - A custom node package can have both, just Python, or (rarely) just JavaScript
@@ -57,22 +61,37 @@ ComfyUI migrated to TypeScript and Vite, but thousands of extensions rely on the
 ### How the Shim Works
 
 **Production Build:**
-During production build, a custom Vite plugin:
-- Binds all module exports to `window.comfyAPI`
-- Generates shim files that re-export from this global object
+During production build, a custom Vite plugin
+(`build/plugins/comfyAPIPlugin.ts`) processes files under `src/scripts/` and
+`src/extensions/core/`:
+
+- Appends assignments binding every top-level export to
+  `window.comfyAPI.<moduleName>`, where `moduleName` is the source file's
+  basename without its extension
+- Emits a sibling `.js` shim file that re-reads those exports off the global
 
 ```javascript
-// Original source: /scripts/api.ts
-export const api = { }
+// Original source: src/scripts/api.ts
+export const api = {}
 
-// Generated shim: /scripts/api.js
-export * from window.comfyAPI.modules['/scripts/api.js']
+// Appended to the bundled module:
+window.comfyAPI = window.comfyAPI || {}
+window.comfyAPI.api = window.comfyAPI.api || {}
+window.comfyAPI.api.api = api
+
+// Generated shim: scripts/api.js
+export const api = window.comfyAPI.api.api
 
 // Extension imports work unchanged:
 import { api } from '/scripts/api.js'
 ```
 
+Only `export const|let|var|function|class|async function` declarations are
+detected. Re-exports (`export { x } from './y'`) and default exports are not
+bound to `window.comfyAPI`.
+
 **Why Dev Server Can't Support This:**
+
 - The dev server serves raw source files without bundling
 - Vite refuses to transform node_modules in unbundled mode
 - Creating real-time shims would require intercepting every module request
@@ -81,6 +100,7 @@ import { api } from '/scripts/api.js'
 ### The Trade-off
 
 This was the least friction approach:
+
 - ✅ Extensions work in production without changes
 - ✅ Developers get modern tooling (TypeScript, hot reload)
 - ❌ Extension testing requires production build or workarounds
@@ -97,20 +117,22 @@ The alternative would have been breaking all existing extensions or staying with
    import { app } from '../../scripts/app'
    import { api } from '../../scripts/api'
    ```
-3. Add to `src/extensions/core/index.ts`
+3. Export the extension object instead of calling `app.registerExtension`, and add it to the ordered list in `src/extensions/core/index.ts`
 4. Test with hot reload working
-5. Move back when complete
+5. When complete, move it back: restore the `app.registerExtension(...)` call and the original imports, and remove its entry from the list in `src/extensions/core/index.ts`
 
 ### Option 2: Use Production Build
 
 Build the frontend for full functionality:
+
 ```bash
-npm run build
+pnpm build
 ```
 
 For faster iteration during development, use watch mode:
+
 ```bash
-npx vite build --watch
+pnpm exec vite build --watch
 ```
 
 Note: Watch mode provides faster rebuilds than full builds, but still no hot reload
@@ -118,8 +140,9 @@ Note: Watch mode provides faster rebuilds than full builds, but still no hot rel
 ### Option 3: Test Against Cloud/Staging
 
 For cloud extensions, modify `.env`:
+
 ```
-DEV_SERVER_COMFYUI_URL=http://stagingcloud.comfy.org/
+DEV_SERVER_COMFYUI_URL=https://stagingcloud.comfy.org/
 ```
 
 ## Key Points

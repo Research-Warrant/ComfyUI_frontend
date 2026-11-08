@@ -1,11 +1,11 @@
 import { expect } from '@playwright/test'
 
-import { userSelectPageFixture as test } from '../fixtures/UserSelectPage'
+import { userSelectPageFixture as test } from '@e2e/fixtures/UserSelectPage'
 
 /**
  * Expects ComfyUI backend to be launched with `--multi-user` flag.
  */
-test.describe('User Select View', () => {
+test.describe('User Select View', { tag: '@settings' }, () => {
   test.beforeEach(async ({ userSelectPage, page }) => {
     await page.goto(userSelectPage.url)
     await page.evaluate(() => {
@@ -36,7 +36,7 @@ test.describe('User Select View', () => {
     await page.goto(userSelectPage.url)
     await expect(page).toHaveURL(userSelectPage.selectionUrl)
     await userSelectPage.existingUserSelect.click()
-    await page.locator('.p-select-list .p-select-option').first().click()
+    await page.getByRole('option').first().click()
     await userSelectPage.nextButton.click()
     await expect(page).toHaveURL(userSelectPage.url)
   })

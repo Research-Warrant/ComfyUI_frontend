@@ -1,233 +1,117 @@
-import type { Positionable } from '@/lib/litegraph/src/interfaces'
-import { LGraphGroup } from '@/lib/litegraph/src/litegraph'
-import { LGraphCanvas } from '@/lib/litegraph/src/litegraph'
-import type { LGraphNode } from '@/lib/litegraph/src/litegraph'
-import { useSettingStore } from '@/stores/settingStore'
+import type { Positionable } from '@comfyorg/graph-model/interfaces'
+import type { IContextMenuValue } from '@/lib/litegraph/src/types/contextMenu'
+import { LGraphEventMode, LGraphGroup } from '@/lib/litegraph/src/litegraph'
+import type { LGraphNode, LGraphCanvas } from '@/lib/litegraph/src/litegraph'
+import { useSettingStore } from '@/platform/settings/settingStore'
+import type { ComfyExtension } from '@/types/comfy'
 
-import { app } from '../../scripts/app'
-
-function setNodeMode(node: LGraphNode, mode: number) {
+function setNodeMode(node: LGraphNode, mode: LGraphEventMode) {
   node.mode = mode
   node.graph?.change()
 }
+
+const MODE_MENU_ITEMS = [
+  { content: 'Set Group Nodes to Always', mode: LGraphEventMode.ALWAYS },
+  { content: 'Set Group Nodes to Never', mode: LGraphEventMode.NEVER },
+  { content: 'Bypass Group Nodes', mode: LGraphEventMode.BYPASS }
+] as const
 
 function addNodesToGroup(group: LGraphGroup, items: Iterable<Positionable>) {
   const padding = useSettingStore().get('Comfy.GroupSelectedNodes.Padding')
   group.resizeTo([...group.children, ...items], padding)
 }
 
-app.registerExtension({
+export const groupOptionsExtension: ComfyExtension = {
   name: 'Comfy.GroupOptions',
-  setup() {
-    const orig = LGraphCanvas.prototype.getCanvasMenuOptions
-    // graph_mouse
-    LGraphCanvas.prototype.getCanvasMenuOptions = function (
-      this: LGraphCanvas
-    ) {
-      // @ts-expect-error fixme ts strict error
-      const options = orig.apply(this, arguments)
-      // @ts-expect-error fixme ts strict error
-      const group = this.graph.getGroupOnPos(
-        this.graph_mouse[0],
-        this.graph_mouse[1]
-      )
-      if (!group) {
-        if (this.selectedItems.size > 0) {
-          options.push({
-            content: 'Add Group For Selected Nodes',
-            callback: () => {
-              const group = new LGraphGroup()
-              addNodesToGroup(group, this.selectedItems)
-              // @ts-expect-error fixme ts strict error
-              this.graph.add(group)
-              // @ts-expect-error fixme ts strict error
-              this.graph.change()
-            }
-          })
-        }
 
-        return options
-      }
+  getCanvasMenuItems(canvas: LGraphCanvas): (IContextMenuValue | null)[] {
+    const items: (IContextMenuValue | null)[] = []
+    const graph = canvas.graph
+    if (!graph) return items
 
-      // Group nodes aren't recomputed until the group is moved, this ensures the nodes are up-to-date
-      group.recomputeInsideNodes()
-      const nodesInGroup = group.nodes
+    const group = graph.getGroupOnPos(
+      canvas.graph_mouse[0],
+      canvas.graph_mouse[1]
+    )
 
-      options.push({
-        content: 'Add Selected Nodes To Group',
-        disabled: !this.selectedItems?.size,
-        callback: () => {
-          addNodesToGroup(group, this.selectedItems)
-          // @ts-expect-error fixme ts strict error
-          this.graph.change()
-        }
-      })
-
-      // No nodes in group, return default options
-      if (nodesInGroup.length === 0) {
-        return options
-      } else {
-        // Add a separator between the default options and the group options
-        // @ts-expect-error fixme ts strict error
-        options.push(null)
-      }
-
-      // Check if all nodes are the same mode
-      let allNodesAreSameMode = true
-      for (let i = 1; i < nodesInGroup.length; i++) {
-        if (nodesInGroup[i].mode !== nodesInGroup[0].mode) {
-          allNodesAreSameMode = false
-          break
-        }
-      }
-
-      options.push({
-        content: 'Fit Group To Nodes',
-        callback: () => {
-          group.recomputeInsideNodes()
-          const padding = useSettingStore().get(
-            'Comfy.GroupSelectedNodes.Padding'
-          )
-          group.resizeTo(group.children, padding)
-          // @ts-expect-error fixme ts strict error
-          this.graph.change()
-        }
-      })
-
-      options.push({
-        content: 'Select Nodes',
-        callback: () => {
-          this.selectNodes(nodesInGroup)
-          // @ts-expect-error fixme ts strict error
-          this.graph.change()
-          this.canvas.focus()
-        }
-      })
-
-      // Modes
-      // 0: Always
-      // 1: On Event
-      // 2: Never
-      // 3: On Trigger
-      // 4: Bypass
-      // If all nodes are the same mode, add a menu option to change the mode
-      if (allNodesAreSameMode) {
-        const mode = nodesInGroup[0].mode
-        switch (mode) {
-          case 0:
-            // All nodes are always, option to disable, and bypass
-            options.push({
-              content: 'Set Group Nodes to Never',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 2)
-                }
-              }
-            })
-            options.push({
-              content: 'Bypass Group Nodes',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 4)
-                }
-              }
-            })
-            break
-          case 2:
-            // All nodes are never, option to enable, and bypass
-            options.push({
-              content: 'Set Group Nodes to Always',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 0)
-                }
-              }
-            })
-            options.push({
-              content: 'Bypass Group Nodes',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 4)
-                }
-              }
-            })
-            break
-          case 4:
-            // All nodes are bypass, option to enable, and disable
-            options.push({
-              content: 'Set Group Nodes to Always',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 0)
-                }
-              }
-            })
-            options.push({
-              content: 'Set Group Nodes to Never',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 2)
-                }
-              }
-            })
-            break
-          default:
-            // All nodes are On Trigger or On Event(Or other?), option to disable, set to always, or bypass
-            options.push({
-              content: 'Set Group Nodes to Always',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 0)
-                }
-              }
-            })
-            options.push({
-              content: 'Set Group Nodes to Never',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 2)
-                }
-              }
-            })
-            options.push({
-              content: 'Bypass Group Nodes',
-              callback: () => {
-                for (const node of nodesInGroup) {
-                  setNodeMode(node, 4)
-                }
-              }
-            })
-            break
-        }
-      } else {
-        // Nodes are not all the same mode, add a menu option to change the mode to always, never, or bypass
-        options.push({
-          content: 'Set Group Nodes to Always',
+    if (!group) {
+      if (canvas.selectedItems.size > 0) {
+        items.push({
+          content: 'Add Group For Selected Nodes',
           callback: () => {
-            for (const node of nodesInGroup) {
-              setNodeMode(node, 0)
-            }
-          }
-        })
-        options.push({
-          content: 'Set Group Nodes to Never',
-          callback: () => {
-            for (const node of nodesInGroup) {
-              setNodeMode(node, 2)
-            }
-          }
-        })
-        options.push({
-          content: 'Bypass Group Nodes',
-          callback: () => {
-            for (const node of nodesInGroup) {
-              setNodeMode(node, 4)
-            }
+            const group = new LGraphGroup()
+            addNodesToGroup(group, canvas.selectedItems)
+            graph.add(group)
+            graph.change()
+
+            group.recomputeInsideNodes()
           }
         })
       }
 
-      return options
+      return items
     }
+
+    // Group nodes aren't recomputed until the group is moved, this ensures the nodes are up-to-date
+    group.recomputeInsideNodes()
+    const nodesInGroup = group.nodes
+
+    items.push({
+      content: 'Add Selected Nodes To Group',
+      disabled: !canvas.selectedItems.size,
+      callback: () => {
+        addNodesToGroup(group, canvas.selectedItems)
+        graph.change()
+      }
+    })
+
+    // No nodes in group, return default options
+    if (nodesInGroup.length === 0) {
+      return items
+    } else {
+      // Add a separator between the default options and the group options
+      items.push(null)
+    }
+
+    const firstMode = nodesInGroup[0].mode
+    const sharedMode = nodesInGroup.every((node) => node.mode === firstMode)
+      ? firstMode
+      : undefined
+
+    items.push({
+      content: 'Fit Group To Nodes',
+      callback: () => {
+        group.recomputeInsideNodes()
+        const padding = useSettingStore().get(
+          'Comfy.GroupSelectedNodes.Padding'
+        )
+        group.resizeTo(group.children, padding)
+        graph.change()
+      }
+    })
+
+    items.push({
+      content: 'Select Nodes',
+      callback: () => {
+        canvas.selectNodes(nodesInGroup)
+        graph.change()
+        canvas.canvas.focus()
+      }
+    })
+
+    for (const { content, mode } of MODE_MENU_ITEMS) {
+      if (mode === sharedMode) continue
+
+      items.push({
+        content,
+        callback: () => {
+          for (const node of nodesInGroup) {
+            setNodeMode(node, mode)
+          }
+        }
+      })
+    }
+
+    return items
   }
-})
+}

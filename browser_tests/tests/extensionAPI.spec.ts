@@ -1,24 +1,26 @@
 import { expect } from '@playwright/test'
 
-import { SettingParams } from '../../src/types/settingTypes'
-import { comfyPageFixture as test } from '../fixtures/ComfyPage'
+import type { Settings, SettingParams } from '@comfyorg/settings-core/types'
+import { comfyPageFixture as test } from '@e2e/fixtures/ComfyPage'
+
+/**
+ * Type helper for test settings with arbitrary IDs.
+ * Extensions can register settings with any ID, but SettingParams.id
+ * is typed as keyof Settings for autocomplete. This helper allows
+ * arbitrary IDs in tests while keeping type safety for other fields.
+ */
+type TestSettingId = keyof Settings
 
 test.describe('Topbar commands', () => {
-  test.beforeEach(async ({ comfyPage }) => {
-    await comfyPage.setSetting('Comfy.UseNewMenu', 'Top')
-  })
-
   test('Should allow registering topbar commands', async ({ comfyPage }) => {
     await comfyPage.page.evaluate(() => {
-      window['app'].registerExtension({
+      window.app!.registerExtension({
         name: 'TestExtension1',
         commands: [
           {
             id: 'foo',
             label: 'foo-command',
-            function: () => {
-              window['foo'] = true
-            }
+            function: () => {}
           }
         ],
         menuCommands: [
@@ -29,17 +31,18 @@ test.describe('Topbar commands', () => {
         ]
       })
     })
+    await comfyPage.command.mockCommand('foo')
 
     await comfyPage.menu.topbar.triggerTopbarCommand(['ext', 'foo-command'])
-    expect(await comfyPage.page.evaluate(() => window['foo'])).toBe(true)
+    await expect.poll(() => comfyPage.command.getExecutionCount('foo')).toBe(1)
   })
 
   test('Should not allow register command defined in other extension', async ({
     comfyPage
   }) => {
-    await comfyPage.registerCommand('foo', () => alert(1))
+    await comfyPage.command.registerCommand('foo', () => alert(1))
     await comfyPage.page.evaluate(() => {
-      window['app'].registerExtension({
+      window.app!.registerExtension({
         name: 'TestExtension1',
         menuCommands: [
           {
@@ -51,20 +54,18 @@ test.describe('Topbar commands', () => {
     })
 
     const menuItem = comfyPage.menu.topbar.getMenuItem('ext')
-    expect(await menuItem.count()).toBe(0)
+    await expect(menuItem).toHaveCount(0)
   })
 
   test('Should allow registering keybindings', async ({ comfyPage }) => {
     await comfyPage.page.evaluate(() => {
-      const app = window['app']
+      const app = window.app!
       app.registerExtension({
         name: 'TestExtension1',
         commands: [
           {
             id: 'TestCommand',
-            function: () => {
-              window['TestCommand'] = true
-            }
+            function: () => {}
           }
         ],
         keybindings: [
@@ -75,70 +76,93 @@ test.describe('Topbar commands', () => {
         ]
       })
     })
+    await comfyPage.command.mockCommand('TestCommand')
 
     await comfyPage.page.keyboard.press('k')
-    expect(await comfyPage.page.evaluate(() => window['TestCommand'])).toBe(
-      true
-    )
+    await expect
+      .poll(() => comfyPage.command.getExecutionCount('TestCommand'))
+      .toBe(1)
   })
 
   test.describe('Settings', () => {
     test('Should allow adding settings', async ({ comfyPage }) => {
       await comfyPage.page.evaluate(() => {
-        window['app'].registerExtension({
+        window.app!.registerExtension({
           name: 'TestExtension1',
           settings: [
             {
-              id: 'TestSetting',
+              // Extensions can register arbitrary setting IDs
+              id: 'TestSetting' as TestSettingId,
               name: 'Test Setting',
               type: 'text',
               defaultValue: 'Hello, world!',
               onChange: () => {
-                window['changeCount'] = (window['changeCount'] ?? 0) + 1
+                window.changeCount = (window.changeCount ?? 0) + 1
               }
             }
           ]
         })
       })
       // onChange is called when the setting is first added
-      expect(await comfyPage.page.evaluate(() => window['changeCount'])).toBe(1)
-      expect(await comfyPage.getSetting('TestSetting')).toBe('Hello, world!')
+      await expect
+        .poll(() => comfyPage.page.evaluate(() => window.changeCount))
+        .toBe(1)
+      await expect
+        .poll(() => comfyPage.settings.getSetting('TestSetting'))
+        .toBe('Hello, world!')
 
-      await comfyPage.setSetting('TestSetting', 'Hello, universe!')
-      expect(await comfyPage.getSetting('TestSetting')).toBe('Hello, universe!')
-      expect(await comfyPage.page.evaluate(() => window['changeCount'])).toBe(2)
+      await comfyPage.settings.setSetting('TestSetting', 'Hello, universe!')
+      await expect
+        .poll(() => comfyPage.settings.getSetting('TestSetting'))
+        .toBe('Hello, universe!')
+      await expect
+        .poll(() => comfyPage.page.evaluate(() => window.changeCount))
+        .toBe(2)
     })
 
     test('Should allow setting boolean settings', async ({ comfyPage }) => {
       await comfyPage.page.evaluate(() => {
-        window['app'].registerExtension({
+        window.app!.registerExtension({
           name: 'TestExtension1',
           settings: [
             {
-              id: 'Comfy.TestSetting',
+              // Extensions can register arbitrary setting IDs
+              id: 'Comfy.TestSetting' as TestSettingId,
               name: 'Test Setting',
               type: 'boolean',
               defaultValue: false,
               onChange: () => {
-                window['changeCount'] = (window['changeCount'] ?? 0) + 1
+                window.changeCount = (window.changeCount ?? 0) + 1
               }
             }
           ]
         })
       })
 
-      expect(await comfyPage.getSetting('Comfy.TestSetting')).toBe(false)
-      expect(await comfyPage.page.evaluate(() => window['changeCount'])).toBe(1)
+      await expect
+        .poll(() => comfyPage.settings.getSetting('Comfy.TestSetting'))
+        .toBe(false)
+      await expect
+        .poll(() => comfyPage.page.evaluate(() => window.changeCount))
+        .toBe(1)
 
       await comfyPage.settingDialog.open()
       await comfyPage.settingDialog.toggleBooleanSetting('Comfy.TestSetting')
-      expect(await comfyPage.getSetting('Comfy.TestSetting')).toBe(true)
-      expect(await comfyPage.page.evaluate(() => window['changeCount'])).toBe(2)
+      await expect
+        .poll(() => comfyPage.settings.getSetting('Comfy.TestSetting'))
+        .toBe(true)
+      await expect
+        .poll(() => comfyPage.page.evaluate(() => window.changeCount))
+        .toBe(2)
     })
 
     test.describe('Passing through attrs to setting components', () => {
       const testCases: Array<{
-        config: Partial<SettingParams>
+        config: {
+          type: Extract<SettingParams['type'], string>
+          defaultValue: string | number | boolean
+          options?: string[]
+        }
         selector: string
       }> = [
         {
@@ -146,21 +170,21 @@ test.describe('Topbar commands', () => {
             type: 'boolean',
             defaultValue: true
           },
-          selector: '.p-toggleswitch.p-component'
+          selector: 'button[role="switch"]'
         },
         {
           config: {
             type: 'number',
             defaultValue: 10
           },
-          selector: '.p-inputnumber input'
+          selector: 'input[inputmode="decimal"]'
         },
         {
           config: {
             type: 'slider',
             defaultValue: 10
           },
-          selector: '.p-slider.p-component'
+          selector: '[data-slot="slider"]'
         },
         {
           config: {
@@ -168,21 +192,21 @@ test.describe('Topbar commands', () => {
             defaultValue: 'foo',
             options: ['foo', 'bar', 'baz']
           },
-          selector: '.p-select.p-component'
+          selector: '[role="combobox"]'
         },
         {
           config: {
             type: 'text',
             defaultValue: 'Hello'
           },
-          selector: '.p-inputtext'
+          selector: 'input'
         },
         {
           config: {
             type: 'color',
             defaultValue: '#000000'
           },
-          selector: '.p-colorpicker-preview'
+          selector: '.color-picker-wrapper > button'
         }
       ] as const
 
@@ -191,13 +215,13 @@ test.describe('Topbar commands', () => {
           comfyPage
         }) => {
           await comfyPage.page.evaluate((config) => {
-            window['app'].registerExtension({
+            window.app!.registerExtension({
               name: 'TestExtension1',
               settings: [
                 {
-                  id: 'Comfy.TestSetting',
+                  // Extensions can register arbitrary setting IDs
+                  id: 'Comfy.TestSetting' as TestSettingId,
                   name: 'Test',
-                  // The `disabled` attr is common to all settings components
                   attrs: { disabled: true },
                   ...config
                 }
@@ -210,12 +234,11 @@ test.describe('Topbar commands', () => {
             .getByText('TestSetting Test')
             .locator(selector)
 
-          const isDisabled = await component.evaluate((el) =>
-            el.tagName === 'INPUT'
-              ? (el as HTMLInputElement).disabled
-              : el.classList.contains('p-disabled')
-          )
-          expect(isDisabled).toBe(true)
+          if (config.type === 'slider') {
+            await expect(component).toHaveAttribute('aria-disabled', 'true')
+          } else {
+            await expect(component).toBeDisabled()
+          }
         })
       }
     })
@@ -224,7 +247,7 @@ test.describe('Topbar commands', () => {
   test.describe('About panel', () => {
     test('Should allow adding badges', async ({ comfyPage }) => {
       await comfyPage.page.evaluate(() => {
-        window['app'].registerExtension({
+        window.app!.registerExtension({
           name: 'TestExtension1',
           aboutPageBadges: [
             {
@@ -240,92 +263,142 @@ test.describe('Topbar commands', () => {
       await comfyPage.settingDialog.goToAboutPanel()
       const badge = comfyPage.page.locator('.about-badge').last()
       expect(badge).toBeDefined()
-      expect(await badge.textContent()).toContain('Test Badge')
+      await expect(badge).toContainText('Test Badge')
     })
   })
 
   test.describe('Dialog', () => {
     test('Should allow showing a prompt dialog', async ({ comfyPage }) => {
       await comfyPage.page.evaluate(() => {
-        window['app'].extensionManager.dialog
-          .prompt({
+        void window
+          .app!.extensionManager.dialog.prompt({
             title: 'Test Prompt',
             message: 'Test Prompt Message'
           })
-          .then((value: string) => {
-            window['value'] = value
+          .then((value: string | null) => {
+            ;(window as unknown as Record<string, unknown>)['value'] = value
           })
       })
 
-      await comfyPage.fillPromptDialog('Hello, world!')
-      expect(await comfyPage.page.evaluate(() => window['value'])).toBe(
-        'Hello, world!'
-      )
+      await comfyPage.nodeOps.fillPromptDialog('Hello, world!')
+      await expect
+        .poll(() =>
+          comfyPage.page.evaluate(
+            () => (window as unknown as Record<string, unknown>)['value']
+          )
+        )
+        .toBe('Hello, world!')
     })
 
     test('Should allow showing a confirmation dialog', async ({
       comfyPage
     }) => {
       await comfyPage.page.evaluate(() => {
-        window['app'].extensionManager.dialog
-          .confirm({
+        void window
+          .app!.extensionManager.dialog.confirm({
             title: 'Test Confirm',
             message: 'Test Confirm Message'
           })
-          .then((value: boolean) => {
-            window['value'] = value
+          .then((value: boolean | null) => {
+            ;(window as unknown as Record<string, unknown>)['value'] = value
           })
       })
 
       await comfyPage.confirmDialog.click('confirm')
-      expect(await comfyPage.page.evaluate(() => window['value'])).toBe(true)
+      await expect
+        .poll(() =>
+          comfyPage.page.evaluate(
+            () => (window as unknown as Record<string, unknown>)['value']
+          )
+        )
+        .toBe(true)
+    })
+
+    test('Should center a native legacy modal over Settings and let it take clicks', async ({
+      comfyPage
+    }) => {
+      await comfyPage.settingDialog.open()
+      await comfyPage.page.evaluate(() => {
+        const dialog = document.createElement('dialog')
+        dialog.className = 'comfy-dialog comfyui-dialog comfy-modal'
+        dialog.style.display = 'flex'
+        const option = document.createElement('input')
+        option.type = 'checkbox'
+        option.setAttribute('aria-label', 'Extension option')
+        dialog.append(option)
+        document.body.append(dialog)
+        dialog.showModal()
+      })
+      const option = comfyPage.page.getByRole('checkbox', {
+        name: 'Extension option'
+      })
+      const dialog = comfyPage.page.getByRole('dialog').filter({ has: option })
+
+      await expect
+        .poll(() =>
+          dialog.evaluate((element) => {
+            const bounds = element.getBoundingClientRect()
+            return Math.max(
+              Math.abs(bounds.x + bounds.width / 2 - window.innerWidth / 2),
+              Math.abs(bounds.y + bounds.height / 2 - window.innerHeight / 2)
+            )
+          })
+        )
+        .toBeLessThan(1)
+
+      await option.click()
+
+      await expect(option).toBeChecked()
     })
 
     test('Should allow dismissing a dialog', async ({ comfyPage }) => {
       await comfyPage.page.evaluate(() => {
-        window['value'] = 'foo'
-        window['app'].extensionManager.dialog
-          .confirm({
+        ;(window as unknown as Record<string, unknown>)['value'] = 'foo'
+        void window
+          .app!.extensionManager.dialog.confirm({
             title: 'Test Confirm',
             message: 'Test Confirm Message'
           })
-          .then((value: boolean) => {
-            window['value'] = value
+          .then((value: boolean | null) => {
+            ;(window as unknown as Record<string, unknown>)['value'] = value
           })
       })
 
       await comfyPage.confirmDialog.click('reject')
-      expect(await comfyPage.page.evaluate(() => window['value'])).toBeNull()
+      await expect
+        .poll(() =>
+          comfyPage.page.evaluate(
+            () => (window as unknown as Record<string, unknown>)['value']
+          )
+        )
+        .toBeNull()
     })
   })
 
   test.describe('Selection Toolbox', () => {
-    test.beforeEach(async ({ comfyPage }) => {
-      await comfyPage.setSetting('Comfy.Canvas.SelectionToolbox', true)
-    })
+    test.use({ initialSettings: { 'Comfy.Canvas.SelectionToolbox': true } })
 
     test('Should allow adding commands to selection toolbox', async ({
       comfyPage
     }) => {
       // Register an extension with a selection toolbox command
       await comfyPage.page.evaluate(() => {
-        window['app'].registerExtension({
+        window.app!.registerExtension({
           name: 'TestExtension1',
           commands: [
             {
               id: 'test.selection.command',
               label: 'Test Command',
               icon: 'pi pi-star',
-              function: () => {
-                window['selectionCommandExecuted'] = true
-              }
+              function: () => {}
             }
           ],
           getSelectionToolboxCommands: () => ['test.selection.command']
         })
       })
+      await comfyPage.command.mockCommand('test.selection.command')
 
-      await comfyPage.selectNodes(['CLIP Text Encode (Prompt)'])
+      await comfyPage.nodeOps.selectNodes(['CLIP Text Encode (Prompt)'])
 
       // Click the command button in the selection toolbox
       const toolboxButton = comfyPage.page.locator(
@@ -333,10 +406,11 @@ test.describe('Topbar commands', () => {
       )
       await toolboxButton.click()
 
-      // Verify the command was executed
-      expect(
-        await comfyPage.page.evaluate(() => window['selectionCommandExecuted'])
-      ).toBe(true)
+      await expect
+        .poll(() =>
+          comfyPage.command.getExecutionCount('test.selection.command')
+        )
+        .toBe(1)
     })
   })
 })

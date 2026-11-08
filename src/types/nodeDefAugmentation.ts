@@ -5,13 +5,13 @@
  * types with frontend-specific properties. These augmentations are applied at
  * runtime and are not part of the backend API contract.
  */
-import type { ComboInputOptions, InputSpec } from '@/schemas/nodeDefSchema'
+import type { ComboInputOptions, InputSpec } from '@comfyorg/object-info-parser'
 
 /**
  * Frontend augmentation for image upload combo inputs.
  * This extends ComboInputOptions with properties injected by the uploadImage extension.
  */
-export interface ImageUploadComboOptions extends ComboInputOptions {
+interface ImageUploadComboOptions extends ComboInputOptions {
   /**
    * Reference to the associated filename combo widget.
    * Injected by uploadImage.ts to link upload buttons with their combo widgets.

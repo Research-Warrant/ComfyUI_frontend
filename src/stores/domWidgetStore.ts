@@ -2,14 +2,15 @@
  * Stores all DOM widgets that are used in the canvas.
  */
 import { defineStore } from 'pinia'
-import { type Raw, computed, markRaw, ref } from 'vue'
+import { computed, markRaw, ref } from 'vue'
+import type { Raw } from 'vue'
 
-import type { PositionConfig } from '@/composables/element/useAbsolutePosition'
-import type { BaseDOMWidget } from '@/scripts/domWidget'
+import type { PositionConfig } from '@comfyorg/shared-frontend-utils/geometry'
+import type { BaseDOMWidget } from '@/types/domWidget'
 
 export interface DomWidgetState extends PositionConfig {
   // Raw widget instance
-  widget: Raw<BaseDOMWidget<object | string>>
+  widget: Raw<BaseDOMWidget>
   visible: boolean
   readonly: boolean
   zIndex: number
@@ -27,12 +28,9 @@ export const useDomWidgetStore = defineStore('domWidget', () => {
     [...widgetStates.value.values()].filter((state) => !state.active)
   )
 
-  // Register a widget with the store
-  const registerWidget = <V extends object | string>(
-    widget: BaseDOMWidget<V>
-  ) => {
+  function registerWidget<V extends object | string>(widget: BaseDOMWidget<V>) {
     widgetStates.value.set(widget.id, {
-      widget: markRaw(widget) as unknown as Raw<BaseDOMWidget<object | string>>,
+      widget: markRaw(widget) as unknown as Raw<BaseDOMWidget>,
       visible: true,
       readonly: false,
       zIndex: 0,
@@ -42,22 +40,28 @@ export const useDomWidgetStore = defineStore('domWidget', () => {
     })
   }
 
-  // Unregister a widget from the store
-  const unregisterWidget = (widgetId: string) => {
+  function unregisterWidget(widgetId: string) {
     widgetStates.value.delete(widgetId)
   }
 
-  const activateWidget = (widgetId: string) => {
+  function activateWidget(widgetId: string) {
     const state = widgetStates.value.get(widgetId)
     if (state) state.active = true
   }
 
-  const deactivateWidget = (widgetId: string) => {
+  function deactivateWidget(widgetId: string) {
     const state = widgetStates.value.get(widgetId)
     if (state) state.active = false
   }
 
-  const clear = () => {
+  function setWidget(widget: BaseDOMWidget) {
+    const state = widgetStates.value.get(widget.id)
+    if (!state) return
+    state.active = true
+    state.widget = widget
+  }
+
+  function clear() {
     widgetStates.value.clear()
   }
 
@@ -69,6 +73,7 @@ export const useDomWidgetStore = defineStore('domWidget', () => {
     unregisterWidget,
     activateWidget,
     deactivateWidget,
+    setWidget,
     clear
   }
 })

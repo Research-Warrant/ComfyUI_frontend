@@ -2,9 +2,8 @@ import { clamp } from 'es-toolkit/compat'
 
 import type {
   ReadOnlyRect,
-  ReadOnlySize,
-  Size
-} from '@/lib/litegraph/src/interfaces'
+  SizeTuple as Size
+} from '@comfyorg/shared-frontend-utils/geometry'
 
 /**
  * Basic width and height, with min/max constraints.
@@ -14,10 +13,10 @@ import type {
  * - Width and height are then updated, clamped to min/max values
  */
 export class ConstrainedSize {
-  #width: number = 0
-  #height: number = 0
-  #desiredWidth: number = 0
-  #desiredHeight: number = 0
+  private _width: number = 0
+  private _height: number = 0
+  private _desiredWidth: number = 0
+  private _desiredHeight: number = 0
 
   minWidth: number = 0
   minHeight: number = 0
@@ -25,29 +24,29 @@ export class ConstrainedSize {
   maxHeight: number = Infinity
 
   get width() {
-    return this.#width
+    return this._width
   }
 
   get height() {
-    return this.#height
+    return this._height
   }
 
   get desiredWidth() {
-    return this.#desiredWidth
+    return this._desiredWidth
   }
 
   set desiredWidth(value: number) {
-    this.#desiredWidth = value
-    this.#width = clamp(value, this.minWidth, this.maxWidth)
+    this._desiredWidth = value
+    this._width = clamp(value, this.minWidth, this.maxWidth)
   }
 
   get desiredHeight() {
-    return this.#desiredHeight
+    return this._desiredHeight
   }
 
   set desiredHeight(value: number) {
-    this.#desiredHeight = value
-    this.#height = clamp(value, this.minHeight, this.maxHeight)
+    this._desiredHeight = value
+    this._height = clamp(value, this.minHeight, this.maxHeight)
   }
 
   constructor(width: number, height: number) {
@@ -55,7 +54,7 @@ export class ConstrainedSize {
     this.desiredHeight = height
   }
 
-  static fromSize(size: ReadOnlySize): ConstrainedSize {
+  static fromSize(size: Readonly<Size>): ConstrainedSize {
     return new ConstrainedSize(size[0], size[1])
   }
 
@@ -63,7 +62,7 @@ export class ConstrainedSize {
     return new ConstrainedSize(rect[2], rect[3])
   }
 
-  setSize(size: ReadOnlySize): void {
+  setSize(size: Readonly<Size>): void {
     this.desiredWidth = size[0]
     this.desiredHeight = size[1]
   }
@@ -74,6 +73,6 @@ export class ConstrainedSize {
   }
 
   toSize(): Size {
-    return [this.#width, this.#height]
+    return [this._width, this._height]
   }
 }
